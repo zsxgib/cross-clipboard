@@ -1,6 +1,8 @@
 package devicemanager
 
 import (
+	"sync"
+
 	"github.com/ntsd/cross-clipboard/pkg/config"
 	"github.com/ntsd/cross-clipboard/pkg/device"
 )
@@ -8,8 +10,8 @@ import (
 type DeviceManager struct {
 	Devices        map[string]*device.Device
 	DevicesUpdated chan struct{}
-
-	config *config.Config
+	config        *config.Config
+	mu            sync.RWMutex
 }
 
 func NewDeviceManager(cfg *config.Config) *DeviceManager {
@@ -21,11 +23,15 @@ func NewDeviceManager(cfg *config.Config) *DeviceManager {
 }
 
 func (dm *DeviceManager) AddDevice(device *device.Device) {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
 	dm.Devices[device.AddressInfo.ID.String()] = device
 	dm.DevicesUpdated <- struct{}{}
 }
 
 func (dm *DeviceManager) RemoveDevice(device *device.Device) {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
 	// Flush and close ignore error
 	device.Writer.Flush()
 	device.Stream.Close()
@@ -34,10 +40,14 @@ func (dm *DeviceManager) RemoveDevice(device *device.Device) {
 }
 
 func (dm *DeviceManager) GetDevice(id string) *device.Device {
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
 	return dm.Devices[id]
 }
 
 func (dm *DeviceManager) UpdateDevice(device *device.Device) {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
 	dm.Devices[device.AddressInfo.ID.String()] = device
 	dm.DevicesUpdated <- struct{}{}
 	dm.Save()
