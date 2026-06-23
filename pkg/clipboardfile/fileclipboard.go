@@ -30,3 +30,22 @@ type FileClipboard interface {
 
 // PollingInterval is the default Watch poll interval.
 var PollingInterval = 500 * time.Millisecond
+
+// samePathSet reports whether the two file path slices contain the same
+// elements regardless of order. Used by both the Linux and Windows
+// implementations of Watch to skip duplicate emissions.
+func samePathSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	m := make(map[string]struct{}, len(a))
+	for _, p := range a {
+		m[p] = struct{}{}
+	}
+	for _, p := range b {
+		if _, ok := m[p]; !ok {
+			return false
+		}
+	}
+	return true
+}
