@@ -3,6 +3,7 @@ package clipboard
 import (
 	"bytes"
 	"context"
+	"sync/atomic"
 
 	"github.com/ntsd/cross-clipboard/pkg/config"
 	"github.com/ntsd/cross-clipboard/pkg/device"
@@ -18,6 +19,12 @@ type ClipboardManager struct {
 	ClipboardsHistory        []*Clipboard
 	ClipboardsHistoryUpdated chan struct{}
 	receivedClipboard        *Clipboard
+
+	// fileClipboardActive is set by the file clipboard watcher when the
+	// OS clipboard currently holds one or more file URIs. While true,
+	// sendClipboard suppresses text/image emission so a path like
+	// /home/user/file.txt is not broadcast as a clipboard "text" event.
+	fileClipboardActive atomic.Bool
 }
 
 // NewClipboardManager create new clipbaord manager
@@ -82,6 +89,20 @@ func (c *ClipboardManager) IsReceivedDevice(dv *device.Device) bool {
 }
 
 // IsReceivedClipboard returns true if it's same clipboard data with the received clipboard
+// SetFileClipboardActive flags the manager so sendClipboard will not
+// broadcast the current text/image content as a clipboard event. Used by
+// the file clipboard watcher when it sees the OS clipboard holding
+// file URIs.
+func (c *ClipboardManager) SetFileClipboardActive(active bool) {
+	c.fileClipboardActive.Store(active)
+}
+
+// IsFileClipboardActive reports whether the file clipboard watcher has
+// recently signalled that the OS clipboard holds file URIs.
+func (c *ClipboardManager) IsFileClipboardActive() bool {
+	return c.fileClipboardActive.Load()
+}
+
 func (c *ClipboardManager) IsReceivedClipboard(clipboardData []byte) bool {
 	if c.receivedClipboard == nil {
 		return false

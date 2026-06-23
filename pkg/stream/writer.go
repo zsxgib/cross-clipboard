@@ -46,6 +46,15 @@ func (s *StreamHandler) sendClipboard(clipboardBytes []byte, isImage bool) {
 		return
 	}
 
+	// While the file clipboard watcher reports the OS clipboard holds
+	// file URIs, do not re-broadcast the same payload as text/image.
+	// The path of the file (e.g. /home/user/file.txt) would otherwise
+	// be sent to the peer as a clipboard text event.
+	if s.clipboardManager.IsFileClipboardActive() {
+		s.logChan <- fmt.Sprintf("suppressing clipboard send: file clipboard active (size %d)", clipboardLength)
+		return
+	}
+
 	cb := &clipboard.Clipboard{
 		IsImage: isImage,
 		Data:    clipboardBytes,

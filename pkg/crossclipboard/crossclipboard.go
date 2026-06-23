@@ -117,7 +117,7 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 			cc.LogChan,
 			cc.ErrorChan,
 			pgpDecrypter,
-			cc.Config.FileTempDir,
+			cc.fileTransfer.Dir,
 			cc.handleFileReceived,
 		)
 		cc.streamHandler = streamHandler
@@ -276,6 +276,13 @@ func (cc *CrossClipboard) runFileWatcher() {
 	defer cancel()
 	ch := cc.fileWatcher.Watch(ctx)
 	for paths := range ch {
+		if len(paths) > 0 {
+			cc.ClipboardManager.SetFileClipboardActive(true)
+			go func() {
+				time.Sleep(5 * time.Second)
+				cc.ClipboardManager.SetFileClipboardActive(false)
+			}()
+		}
 		cc.dispatchFileURIs(paths, dedup)
 	}
 }
