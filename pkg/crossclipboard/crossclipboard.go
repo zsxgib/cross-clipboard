@@ -271,7 +271,7 @@ func (cc *CrossClipboard) AutoPaste() bool {
 // runFileWatcher is the long-lived goroutine that bridges the OS clipboard
 // file-URI watcher to the per-device file senders.
 func (cc *CrossClipboard) runFileWatcher() {
-	dedup := filetransfer.NewDedup(5 * time.Second)
+	dedup := filetransfer.NewDedup(5 * time.Minute)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ch := cc.fileWatcher.Watch(ctx)
@@ -279,7 +279,7 @@ func (cc *CrossClipboard) runFileWatcher() {
 		if len(paths) > 0 {
 			cc.ClipboardManager.SetFileClipboardActive(true)
 			go func() {
-				time.Sleep(5 * time.Second)
+				time.Sleep(30 * time.Second)
 				cc.ClipboardManager.SetFileClipboardActive(false)
 			}()
 		}
