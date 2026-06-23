@@ -125,9 +125,28 @@ public class Clip {
   }
 }
 "@
-Add-Type -TypeDefinition $src -Language CSharp
-$seq = [Clip]::GetClipboardSequenceNumber()
-$paths = [Clip]::GetHDrop()
+try {
+  if (-not ('Clip' -as [type])) {
+    Add-Type -TypeDefinition $src -Language CSharp -ErrorAction Stop
+  }
+} catch {
+  # If Add-Type still fails (corrupt session), skip this poll rather than crash
+  Write-Host "__ERR__addtype"
+  exit 0
+}
+$seq = 0
+$paths = @()
+$attempt = 0
+while ($attempt -lt 3) {
+  $attempt++
+  try {
+    $seq = [Clip]::GetClipboardSequenceNumber()
+    $paths = [Clip]::GetHDrop()
+    break
+  } catch {
+    Start-Sleep -Milliseconds 50
+  }
+}
 Write-Host "__SEQ__$seq"
 foreach ($p in $paths) { Write-Host "__P__$p" }
 `
