@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -55,6 +56,7 @@ func (w *windowsFileClipboard) Watch(ctx context.Context) <-chan []string {
 			case <-t.C:
 				paths, seq, err := w.readFileDropListDirect()
 				if err != nil {
+					log.Printf("runtime error: readFileDropListDirect: %v", err)
 					continue
 				}
 				// Skip work if clipboard sequence number is unchanged
@@ -133,7 +135,7 @@ foreach ($p in $paths) { Write-Host "__P__$p" }
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("powershell read CF_HDROP: %w", err)
 	}
 	for _, line := range strings.Split(out.String(), "\n") {
 		line = strings.TrimSpace(line)
@@ -174,7 +176,12 @@ func (w *windowsFileClipboard) Set(paths []string) error {
 	sb.WriteString("$col.AddRange($paths);")
 	sb.WriteString("[System.Windows.Forms.Clipboard]::SetFileDropList($col)")
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-STA", "-Command", sb.String())
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		log.Printf("runtime error: set file clipboard (%d paths): %v", len(paths), err)
+		return err
+	}
+	log.Printf("set file clipboard: %d paths", len(paths))
+	return nil
 }
 
 // Paste simulates Ctrl+V via SendInput.
