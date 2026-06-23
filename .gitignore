@@ -13,4 +13,7 @@ devices.json
 dist/
 
 .cross-clipboard
-cross-clipboard
+cross-clipboard.claude/
+_smoke/
+_idtest/
+_testid/

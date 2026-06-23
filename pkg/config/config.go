@@ -26,6 +26,10 @@ type Config struct {
 	// Clipbaord Config
 	MaxSize    int `mapstructure:"max_size"`    // limit clipboard size (bytes) to send
 	MaxHistory int `mapstructure:"max_history"` // limit number of clipboard history
+	MaxFileSize int64 `mapstructure:"max_file_size"` // limit file size (bytes) to send
+	FileTempDir string `mapstructure:"file_temp_dir"` // directory to hold received files
+	FileTempRetentionHours int `mapstructure:"file_temp_retention_hours"` // hours before temp files are swept
+	AutoPaste  bool `mapstructure:"auto_paste"` // simulate Ctrl+V after receiving a file
 
 	// UI Config
 	HiddenText bool `mapstructure:"hidden_text"` // hidden clipboard text in UI
@@ -95,6 +99,13 @@ func LoadConfig() (*Config, error) {
 
 	viper.SetDefault("max_size", 5<<20) // 5MB
 	viper.SetDefault("max_history", 10)
+
+	viper.SetDefault("max_file_size", int64(1<<30)) // 1 GiB
+	// file_temp_dir is empty in config; resolved at runtime against the
+	// user's home dir so the default doesn't bake the path of whoever first
+	// ran the binary into the config file.
+	viper.SetDefault("file_temp_retention_hours", 24)
+	viper.SetDefault("auto_paste", true)
 
 	viper.SetDefault("hidden_text", true)
 

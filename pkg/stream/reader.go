@@ -8,16 +8,24 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/ntsd/cross-clipboard/pkg/clipboard"
 	"github.com/ntsd/cross-clipboard/pkg/device"
+	"github.com/ntsd/cross-clipboard/pkg/filetransfer"
 	"github.com/ntsd/cross-clipboard/pkg/xerror"
 )
 
-const limitDataSize = 1 << 20 // data size to avoid to read (100 MB)
+const limitDataSize = 1 << 27 // 128 MiB hard cap on a single frame
+const fileFrameSizeLimit = 1 << 30 // 1 GiB hard cap for a single file frame
 
 // CreateReadData craete a new read streaming for host or peer
 func (s *StreamHandler) CreateReadData(reader *bufio.Reader, dv *device.Device) {
 	s.logChan <- fmt.Sprintf("sending device info and public key to %s", dv.AddressInfo.ID)
 
 	s.sendDeviceData(dv)
+
+	// file receive state, lazily initialized on first FileMeta frame
+	var fileState *filetransfer.ReceiveState
+	if s.fileTempDir != "" {
+		fileState = filetransfer.NewReceiveState(s.fileTempDir)
+	}
 
 	// loop for incoming message
 disconnect:
@@ -44,7 +52,57 @@ disconnect:
 			break disconnect
 		}
 
-		// avoid to read big data from stream
+		// Read the data type first so we can route file frames to a path
+		// that bypasses the clipboard size and PGP decryption.
+		if dataSize > fileFrameSizeLimit {
+			s.errorChan <- xerror.NewRuntimeErrorf("data size %d > file frame size limit %d", dataSize, fileFrameSizeLimit)
+			dv.Status = device.StatusBlocked
+			s.deviceManager.UpdateDevice(dv)
+			break disconnect
+		}
+		header := make([]byte, 1)
+		if _, err := io.ReadFull(reader, header); err != nil {
+			s.errorChan <- xerror.NewRuntimeError("error reading data type").Wrap(err)
+			dv.Status = device.StatusError
+			s.deviceManager.UpdateDevice(dv)
+			break disconnect
+		}
+		dataType := header[0]
+
+		// File channel: handle without PGP and without the MaxSize cap.
+		if isFileDataType(dataType) {
+			if fileState == nil {
+				s.errorChan <- xerror.NewRuntimeError("file receive not configured on this device")
+				// drop the rest of the frame
+				_, _ = reader.Discard(dataSize - 1)
+				continue
+			}
+			payload := make([]byte, dataSize-1)
+			if dataSize > 1 {
+				if _, err := io.ReadFull(reader, payload); err != nil {
+					s.errorChan <- xerror.NewRuntimeError("error reading file frame body").Wrap(err)
+					dv.Status = device.StatusError
+					s.deviceManager.UpdateDevice(dv)
+					break disconnect
+				}
+			}
+			done, res := fileState.HandleFrame(dataType, payload)
+			if res.Err != nil {
+				s.errorChan <- xerror.NewRuntimeErrorf("file receive from %s failed: %v", dv.AddressInfo.ID, res.Err)
+				fileState = filetransfer.NewReceiveState(s.fileTempDir)
+				continue
+			}
+			if done {
+				s.logChan <- fmt.Sprintf("received file: %s size=%d sha=%s from %s", res.Meta.Name, res.Meta.Size, res.Meta.SHA256[:8], dv.AddressInfo.ID)
+				if s.onFileReceived != nil && res.FinalPath != "" {
+					s.onFileReceived(res.FinalPath, res.Meta)
+				}
+				fileState = filetransfer.NewReceiveState(s.fileTempDir)
+			}
+			continue
+		}
+
+		// Non-file frames are subject to the existing limit + PGP path.
 		if dataSize > limitDataSize {
 			s.errorChan <- xerror.NewRuntimeErrorf("data size %d > limit data size %d", dataSize, limitDataSize)
 			dv.Status = device.StatusBlocked
@@ -52,26 +110,25 @@ disconnect:
 			break disconnect
 		}
 
+		// We already consumed the type byte. Read the rest and prepend it
+		// for the existing decodeData which expects the type at index 0.
+		rest := make([]byte, dataSize-1)
+		if dataSize > 1 {
+			if _, err := io.ReadFull(reader, rest); err != nil {
+				s.errorChan <- xerror.NewRuntimeError("error reading frame body").Wrap(err)
+				dv.Status = device.StatusError
+				s.deviceManager.UpdateDevice(dv)
+				break disconnect
+			}
+		}
+		buffer := make([]byte, dataSize)
+		buffer[0] = dataType
+		copy(buffer[1:], rest)
+
 		// skip clipboard size when data more than config max size
 		if dataSize > s.config.MaxSize {
 			s.errorChan <- xerror.NewRuntimeErrorf("data size %d > config max size %d", dataSize, s.config.MaxSize)
-			reader.Discard(dataSize)
 			continue
-		}
-
-		buffer := make([]byte, dataSize)
-		readBytes, err := io.ReadFull(reader, buffer)
-		if err != nil {
-			s.errorChan <- xerror.NewRuntimeError("error reading from buffer").Wrap(err)
-			dv.Status = device.StatusError
-			s.deviceManager.UpdateDevice(dv)
-			break disconnect
-		}
-		if readBytes != dataSize {
-			s.errorChan <- xerror.NewRuntimeErrorf("not reading full bytes read: %d size: %d", readBytes, dataSize)
-			dv.Status = device.StatusError
-			s.deviceManager.UpdateDevice(dv)
-			break disconnect
 		}
 
 		clipboardData, deviceData, signal, err := s.decodeData(buffer)
@@ -129,4 +186,11 @@ disconnect:
 		}
 		s.errorChan <- fmt.Errorf("can not close stream for peer %s: %w", dv.AddressInfo.ID, err)
 	}
+}
+
+func isFileDataType(t byte) bool {
+	return t == byte(DataTypeFileMeta) ||
+		t == byte(DataTypeFileChunk) ||
+		t == byte(DataTypeFileEnd) ||
+		t == byte(DataTypeFileError)
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"time"
 
 	"github.com/libp2p/go-libp2p"
@@ -16,6 +17,7 @@ import (
 	"github.com/ntsd/cross-clipboard/pkg/device"
 	"github.com/ntsd/cross-clipboard/pkg/devicemanager"
 	"github.com/ntsd/cross-clipboard/pkg/discovery"
+	"github.com/ntsd/cross-clipboard/pkg/filetransfer"
 	"github.com/ntsd/cross-clipboard/pkg/stream"
 	"github.com/ntsd/cross-clipboard/pkg/xerror"
 )
@@ -29,6 +31,13 @@ type CrossClipboard struct {
 	DeviceManager    *devicemanager.DeviceManager
 
 	streamHandler *stream.StreamHandler
+
+	// fileTransfer bundles the OS-clipboard + temp dir + dedup state used
+	// by the file copy/paste channel.
+	fileTransfer *filetransfer.TempManager
+	// fileReceivedHook is the optional OS-layer callback. main() wires it
+	// up via SetFileReceivedHook; tests leave it nil.
+	fileReceivedHook func(path string, meta *filetransfer.FileMeta)
 
 	LogChan   chan string
 	ErrorChan chan error
@@ -47,6 +56,16 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 
 	cc.ClipboardManager = clipboard.NewClipboardManager(cc.Config)
 	cc.DeviceManager = devicemanager.NewDeviceManager(cc.Config)
+
+	tempDir := cc.Config.FileTempDir
+	if tempDir == "" {
+		tempDir = filepath.Join(cc.Config.ConfigDirPath, "incoming")
+	}
+	tempMgr, tmErr := filetransfer.NewTempManager(tempDir, time.Duration(cc.Config.FileTempRetentionHours)*time.Hour)
+	if tmErr != nil {
+		return nil, xerror.NewFatalError("file transfer temp manager").Wrap(tmErr)
+	}
+	cc.fileTransfer = tempMgr
 
 	ctx := context.Background()
 
@@ -84,6 +103,8 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 			cc.LogChan,
 			cc.ErrorChan,
 			pgpDecrypter,
+			cc.Config.FileTempDir,
+			cc.handleFileReceived,
 		)
 		cc.streamHandler = streamHandler
 
@@ -184,4 +205,17 @@ func (cc *CrossClipboard) Stop() error {
 	}
 
 	return nil
+}
+
+// handleFileReceived is called by the stream handler after a file is fully
+// received, validated, and written to temp dir. It is the bridge to the OS
+// clipboard + Ctrl+V step.
+func (cc *CrossClipboard) handleFileReceived(path string, meta *filetransfer.FileMeta) {
+	cc.LogChan <- fmt.Sprintf("file received: %s (%d bytes) at %s", meta.Name, meta.Size, path)
+	// OS clipboard + paste wiring lives in pkg/clipboardfile. The wire
+	// integration is intentionally a thin adapter so the package stays
+	// importable from tests without bringing in OS subprocess calls.
+	if cc.fileReceivedHook != nil {
+		cc.fileReceivedHook(path, meta)
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/ntsd/cross-clipboard/pkg/crypto"
 	"github.com/ntsd/cross-clipboard/pkg/device"
 	"github.com/ntsd/cross-clipboard/pkg/devicemanager"
+	"github.com/ntsd/cross-clipboard/pkg/filetransfer"
 )
 
 // StreamHandler struct for stream handler
@@ -23,6 +24,13 @@ type StreamHandler struct {
 	errorChan        chan error
 
 	pgpDecrypter *crypto.PGPDecrypter
+
+	// File transfer channel configuration. fileTempDir is the directory the
+	// receiver drops incoming files into. onFileReceived is invoked once a
+	// file has been fully received, validated, and written; it usually
+	// puts the file on the OS clipboard and triggers Ctrl+V.
+	fileTempDir     string
+	onFileReceived  func(path string, meta *filetransfer.FileMeta)
 }
 
 // NewStreamHandler initial new stream handler
@@ -33,14 +41,18 @@ func NewStreamHandler(
 	logChan chan string,
 	errorChan chan error,
 	pgpDecrypter *crypto.PGPDecrypter,
+	fileTempDir string,
+	onFileReceived func(path string, meta *filetransfer.FileMeta),
 ) *StreamHandler {
 	s := &StreamHandler{
-		config:           cfg,
+		config:          cfg,
 		clipboardManager: cp,
 		deviceManager:    deviceManager,
 		logChan:          logChan,
 		errorChan:        errorChan,
 		pgpDecrypter:     pgpDecrypter,
+		fileTempDir:      fileTempDir,
+		onFileReceived:   onFileReceived,
 	}
 	go s.CreateWriteData()
 	return s

@@ -2,6 +2,7 @@ package device
 
 import (
 	"bufio"
+	"sync"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -22,6 +23,7 @@ type Device struct {
 	Stream network.Stream `json:"-"`
 	Writer *bufio.Writer  `json:"-"`
 	Reader *bufio.Reader  `json:"-"`
+	WriteMu sync.Mutex    `json:"-"` // serializes writes to Writer across goroutines
 
 	PgpEncrypter *crypto.PGPEncrypter `json:"-"`
 }
