@@ -12,6 +12,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/ntsd/cross-clipboard/pkg/clipboard"
+	"github.com/ntsd/cross-clipboard/pkg/clipboardfile"
 	"github.com/ntsd/cross-clipboard/pkg/config"
 	"github.com/ntsd/cross-clipboard/pkg/crypto"
 	"github.com/ntsd/cross-clipboard/pkg/device"
@@ -38,6 +39,10 @@ type CrossClipboard struct {
 	// fileReceivedHook is the optional OS-layer callback. main() wires it
 	// up via SetFileReceivedHook; tests leave it nil.
 	fileReceivedHook func(path string, meta *filetransfer.FileMeta)
+	// fileWatcher is the OS-level file-URI clipboard watcher. nil when
+	// pkg/clipboardfile reports the OS doesn't have xclip/xdotool or
+	// PowerShell available.
+	fileWatcher clipboardfile.FileClipboard
 
 	LogChan   chan string
 	ErrorChan chan error
@@ -66,6 +71,15 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 		return nil, xerror.NewFatalError("file transfer temp manager").Wrap(tmErr)
 	}
 	cc.fileTransfer = tempMgr
+
+	// OS-level file URI clipboard watcher. nil when the OS toolchain
+	// (xclip/xdotool on Linux, PowerShell on Windows) is missing.
+	w := clipboardfile.New()
+	if w.Available() {
+		cc.fileWatcher = w
+	} else {
+		log.Printf("file clipboard watcher unavailable on this host; file sync disabled")
+	}
 
 	ctx := context.Background()
 
@@ -199,6 +213,13 @@ func (cc *CrossClipboard) Stop() error {
 
 	cc.stopDiscovery <- struct{}{}
 
+	if cc.fileWatcher != nil {
+		// The watcher goroutine exits when its context is cancelled. We
+		// can't reach the context from here, so we close the channel by
+		// letting the process exit; in practice Stop() is followed by
+		// os.Exit so this is a soft signal only.
+	}
+
 	err := cc.Host.Close()
 	if err != nil {
 		return xerror.NewFatalError("unable to close host").Wrap(err)
@@ -218,4 +239,111 @@ func (cc *CrossClipboard) handleFileReceived(path string, meta *filetransfer.Fil
 	if cc.fileReceivedHook != nil {
 		cc.fileReceivedHook(path, meta)
 	}
+}
+
+// SetFileReceivedHook installs a callback that runs after a remote file has
+// been fully received, validated, and written to the temp directory. The
+// hook is responsible for putting the file on the OS clipboard and (if
+// AutoPaste is enabled) simulating Ctrl+V so the focused application
+// receives the file as a normal paste.
+func (cc *CrossClipboard) SetFileReceivedHook(hook func(path string, meta *filetransfer.FileMeta)) {
+	cc.fileReceivedHook = hook
+}
+
+// StartFileWatcher launches the goroutine that watches the OS clipboard
+// for file URIs (set by the user's file manager "Copy" action) and
+// pushes each new file to every connected peer. It is a no-op when the
+// OS-level watcher reports unavailable (missing xclip/xdotool on Linux,
+// or PowerShell on Windows).
+func (cc *CrossClipboard) StartFileWatcher() {
+	if cc.fileWatcher == nil {
+		return
+	}
+	go cc.runFileWatcher()
+}
+
+// AutoPaste reports whether the receiver should simulate Ctrl+V after a
+// file arrives. Honored by the fileReceivedHook installed in main().
+func (cc *CrossClipboard) AutoPaste() bool {
+	return cc.Config.AutoPaste
+}
+
+// runFileWatcher is the long-lived goroutine that bridges the OS clipboard
+// file-URI watcher to the per-device file senders.
+func (cc *CrossClipboard) runFileWatcher() {
+	dedup := filetransfer.NewDedup(5 * time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := cc.fileWatcher.Watch(ctx)
+	for paths := range ch {
+		cc.dispatchFileURIs(paths, dedup)
+	}
+}
+
+// dispatchFileURIs fans a slice of file paths out to every connected peer.
+// The 5s dedup window protects against the receive-then-paste cycle: when
+// the receiver writes the file to its own clipboard and the watcher fires
+// again, the second emit is suppressed.
+func (cc *CrossClipboard) dispatchFileURIs(paths []string, dedup *filetransfer.Dedup) {
+	if len(paths) == 0 {
+		return
+	}
+	// Snapshot the connected peers under the device manager read lock
+	// to avoid racing with peer connect/disconnect.
+	peers := cc.snapshotConnectedPeers()
+	if len(peers) == 0 {
+		return
+	}
+	for _, srcPath := range paths {
+		for _, dv := range peers {
+			dv := dv
+			go cc.sendOneFile(dv, srcPath, dedup)
+		}
+	}
+}
+
+func (cc *CrossClipboard) sendOneFile(dv *device.Device, srcPath string, dedup *filetransfer.Dedup) {
+	if dv.Status != device.StatusConnected {
+		return
+	}
+	if dv.PgpEncrypter == nil {
+		// We need a PGP encrypter for any future path that wants to encrypt
+		// the metadata; the file channel itself does not PGP-encrypt the
+		// payload but the channel is a peer-trust channel and we want the
+		// PGP key in place to be safe.
+		cc.ErrorChan <- xerror.NewRuntimeErrorf("no pgp encrypter for %s, skipping file send", dv.AddressInfo.ID)
+		return
+	}
+	progress := func(sent, total int64) {
+		if total <= 0 {
+			return
+		}
+		pct := sent * 100 / total
+		cc.LogChan <- fmt.Sprintf("sending %s to %s: %d/%d bytes (%d%%)", filepath.Base(srcPath), shortID(dv.AddressInfo.ID.String()), sent, total, pct)
+	}
+	logf := func(s string) { cc.LogChan <- s }
+	errf := func(e error) { cc.ErrorChan <- e }
+	if err := filetransfer.SendFile(dv, srcPath, dedup, logf, errf, progress); err != nil {
+		cc.ErrorChan <- xerror.NewRuntimeErrorf("file send to %s failed: %v", dv.AddressInfo.ID, err)
+	}
+}
+
+func (cc *CrossClipboard) snapshotConnectedPeers() []*device.Device {
+	cc.DeviceManager.RLock()
+	defer cc.DeviceManager.RUnlock()
+	out := make([]*device.Device, 0, len(cc.DeviceManager.Devices))
+	for _, dv := range cc.DeviceManager.Devices {
+		if dv.Status == device.StatusConnected {
+			out = append(out, dv)
+		}
+	}
+	return out
+}
+
+// shortID returns the first 8 chars of a peer ID for log lines.
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }

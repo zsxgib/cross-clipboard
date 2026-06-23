@@ -22,6 +22,11 @@ func NewDeviceManager(cfg *config.Config) *DeviceManager {
 	}
 }
 
+// RLock acquires a read lock on the device map so callers can safely
+// snapshot the connected peer list while peers are being added/updated.
+func (dm *DeviceManager) RLock()   { dm.mu.RLock() }
+func (dm *DeviceManager) RUnlock() { dm.mu.RUnlock() }
+
 func (dm *DeviceManager) AddDevice(device *device.Device) {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()

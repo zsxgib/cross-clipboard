@@ -11,6 +11,8 @@ import (
 	"github.com/ntsd/cross-clipboard/pkg/config"
 	"github.com/ntsd/cross-clipboard/pkg/crossclipboard"
 	"github.com/ntsd/cross-clipboard/pkg/device"
+	"github.com/ntsd/cross-clipboard/pkg/clipboardfile"
+	"github.com/ntsd/cross-clipboard/pkg/filetransfer"
 	"github.com/ntsd/cross-clipboard/pkg/xerror"
 	"github.com/ntsd/cross-clipboard/ui"
 )
@@ -28,6 +30,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// File clipboard bridge: when a remote file arrives, put it on the OS
+	// clipboard as a file URI list, then simulate Ctrl+V if AutoPaste is on.
+	crossClipboard.SetFileReceivedHook(func(path string, meta *filetransfer.FileMeta) {
+		handleIncomingFile(path, meta, crossClipboard.AutoPaste())
+	})
+	crossClipboard.StartFileWatcher()
 
 	if isTerminalMode != nil && *isTerminalMode {
 		exitSignal := make(chan os.Signal, 1)
@@ -74,5 +83,25 @@ func main() {
 	} else {
 		view := ui.NewView(crossClipboard)
 		view.Start()
+	}
+}
+
+func handleIncomingFile(path string, meta *filetransfer.FileMeta, autoPaste bool) {
+	fc := clipboardfile.New()
+	if !fc.Available() {
+		log.Printf("file received but OS file clipboard unavailable: %s at %s", meta.Name, path)
+		return
+	}
+	if err := fc.Set([]string{path}); err != nil {
+		log.Printf("failed to put %s on OS clipboard: %v", meta.Name, err)
+		return
+	}
+	log.Printf("file ready on clipboard: %s (%d bytes) at %s", meta.Name, meta.Size, path)
+	if !autoPaste {
+		log.Printf("auto-paste disabled; leaving %s on the clipboard", meta.Name)
+		return
+	}
+	if err := fc.Paste(); err != nil {
+		log.Printf("failed to simulate Ctrl+V for %s: %v", meta.Name, err)
 	}
 }
