@@ -91,7 +91,7 @@ func LoadConfig() (*Config, error) {
 
 	viper.SetDefault("group_name", "default")
 	viper.SetDefault("listen_host", "0.0.0.0")
-	viper.SetDefault("listen_port", 4001)
+	viper.SetDefault("listen_port", 4002)
 
 	viper.SetDefault("max_size", 5<<20) // 5MB
 	viper.SetDefault("max_history", 10)
