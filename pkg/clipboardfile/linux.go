@@ -87,8 +87,12 @@ func (l *linuxFileClipboard) readURIList() ([]string, error) {
 	return parseURIList(string(out)), nil
 }
 
-// parseURIList accepts both `file://` URIs and bare paths. Empty lines are
-// skipped. Whitespace is trimmed.
+// parseURIList accepts `file://` URIs only. Lines that do not start with
+// `file://` are ignored; this prevents the watcher from interpreting
+// arbitrary clipboard text as a file path when the user just copies
+// text or an image. The xclip invocation can return 0 bytes or even the
+// plain text payload if the system clipboard does not have a uri-list,
+// so we must be strict here.
 func parseURIList(s string) []string {
 	var out []string
 	for _, line := range strings.Split(s, "\n") {
@@ -96,10 +100,14 @@ func parseURIList(s string) []string {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if rest, ok := strings.CutPrefix(line, "file://"); ok {
-			line = rest
+		rest, ok := strings.CutPrefix(line, "file://")
+		if !ok {
+			continue
 		}
-		out = append(out, line)
+		if rest == "" {
+			continue
+		}
+		out = append(out, rest)
 	}
 	return out
 }

@@ -17,6 +17,9 @@ func TestParseURIList(t *testing.T) {
 		{"multiple", "file:///a\nfile:///b\n", []string{"/a", "/b"}},
 		{"mixed with spaces", "  file:///a  \n  file:///b  \n", []string{"/a", "/b"}},
 		{"with comments", "# comment\nfile:///a\n", []string{"/a"}},
+		{"rejects bare paths", "/etc/hostname\nfile:///a\n", []string{"/a"}},
+		{"rejects http", "http://example.com/x\nfile:///a\n", []string{"/a"}},
+		{"rejects text content", "hello world\nfile:///a\n", []string{"/a"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
