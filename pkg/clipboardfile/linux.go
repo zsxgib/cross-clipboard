@@ -59,16 +59,43 @@ func (l *linuxFileClipboard) Watch(ctx context.Context) <-chan []string {
 }
 
 // Set writes file:// URIs to the system clipboard using xclip.
+//
+// Populates three MIME types so GNOME / KDE / X11 file managers and other
+// apps recognize the clipboard as a "copied file" and accept Ctrl+V as a
+// file paste:
+//
+//   * x-special/gnome-copied-files -- Nautilus / GNOME Files primary signal
+//   * text/uri-list                 -- POSIX standard fallback (Dolphin,
+//                                      PCManFM, Firefox, Chrome, etc.)
+//   * text/plain                    -- safety net for apps that only
+//                                      request STRING
+//
+// Without x-special/gnome-copied-files, Nautilus ignores the clipboard
+// when Ctrl+V is pressed and the file does not get pasted.
 func (l *linuxFileClipboard) Set(paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	var buf bytes.Buffer
+	var uriList bytes.Buffer
 	for _, p := range paths {
-		fmt.Fprintf(&buf, "file://%s\n", p)
+		fmt.Fprintf(&uriList, "file://%s\n", p)
 	}
-	cmd := exec.Command("xclip", "-selection", "clipboard", "-t", "text/uri-list")
-	cmd.Stdin = &buf
+	plain := uriList.String()
+
+	// xclip with multiple -t flags populates all targets in one process.
+	// The payloads must be concatenated to stdin in the same order as the
+	// -t flags; xclip assigns stdin bytes to each target sequentially.
+	args := []string{"-selection", "clipboard",
+		"-t", "x-special/gnome-copied-files",
+		"-t", "text/uri-list",
+		"-t", "text/plain",
+	}
+	cmd := exec.Command("xclip", args...)
+	var stdin bytes.Buffer
+	stdin.WriteString(plain) // gnome-copied-files
+	stdin.WriteString(plain) // text/uri-list
+	stdin.WriteString(plain) // text/plain
+	cmd.Stdin = &stdin
 	return cmd.Run()
 }
 
