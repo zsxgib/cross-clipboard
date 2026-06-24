@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"time"
 
 	"github.com/ntsd/cross-clipboard/pkg/config"
 	"github.com/ntsd/cross-clipboard/pkg/crossclipboard"
@@ -49,28 +48,22 @@ func main() {
 		// PowerShell -ArgumentList double-escapes backslashes. Undo that.
 		path := strings.ReplaceAll(*setFile, "\\\\", "\\")
 		log.Printf("set-file: normalized path=%q", path)
-		// Use time.AfterFunc so the timer fires on its own goroutine
-		// without depending on the main for-select loop scheduling the
-		// time.Sleep goroutine. Empirically, when the main loop is
-		// tightly parked in `for { select {} }` polling libp2p host
-		// channels, a separate goroutine blocked in time.Sleep(2s) does
-		// not get a tick. time.AfterFunc runs on a dedicated timer
-		// goroutine owned by the runtime.
-		log.Printf("set-file: scheduling AfterFunc 2s, path=%q", path)
-		time.AfterFunc(2*time.Second, func() {
-			log.Printf("set-file: AfterFunc fired, calling New()")
-			fc := clipboardfile.New()
-			log.Printf("set-file: New() returned, Available=%v", fc.Available())
-			if !fc.Available() {
-				log.Printf("set-file: OS file clipboard unavailable")
-				return
-			}
-			if err := fc.Set([]string{path}); err != nil {
-				log.Printf("set-file: %v", err)
-				return
-			}
+		// Set synchronously BEFORE the main loop parks. Empirically
+		// anything in a goroutine (go func, time.AfterFunc, time.Sleep)
+		// while main is in `for { select {} }` polling libp2p host
+		// channels is starved: we observed timers never fire and
+		// goroutines never run their second line. Setting the clipboard
+		// up front (within the first 200ms of startup) avoids the race
+		// with the host channels.
+		log.Printf("set-file: pre-loop Set, path=%q", path)
+		fc := clipboardfile.New()
+		if !fc.Available() {
+			log.Printf("set-file: OS file clipboard unavailable")
+		} else if err := fc.Set([]string{path}); err != nil {
+			log.Printf("set-file: %v", err)
+		} else {
 			log.Printf("set-file: put %s on OS clipboard", path)
-		})
+		}
 	}
 
 	if isTerminalMode != nil && *isTerminalMode {
