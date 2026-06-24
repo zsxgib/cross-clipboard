@@ -64,12 +64,28 @@ func (r *ReceiveState) HandleFrame(typeByte byte, payload []byte) (done bool, re
 			return true, result.withErr(fmt.Errorf("mkdir dest dir: %w", err))
 		}
 		dst := filepath.Join(dir, SafeFileName(m.Name))
-		// If the path already exists, suffix with -<id[:6]>
-		if _, err := os.Stat(dst); err == nil {
-			base := SafeFileName(m.Name)
-			ext := filepath.Ext(base)
-			stem := base[:len(base)-len(ext)]
-			dst = filepath.Join(dir, fmt.Sprintf("%s-%s%s", stem, m.ID[:6], ext))
+		// If the path already exists, decide between reuse / suffix:
+		//   - same content (sha256 matches m.SHA256): reuse dst as-is, the
+		//     later O_TRUNC write will produce the same bytes so the final
+		//     SHA still matches.
+		//   - different content: suffix with -<id[:6]> so we don't clobber
+		//     the existing file.
+		if info, statErr := os.Stat(dst); statErr == nil {
+			suffixNeeded := info.IsDir() // never open a directory as a file
+			if !suffixNeeded {
+				if existingSHA, shaErr := fileSHA256(dst); shaErr == nil && existingSHA == m.SHA256 {
+					// reuse dst unchanged; O_TRUNC + rewrite keeps the same SHA
+					suffixNeeded = false
+				} else {
+					suffixNeeded = true
+				}
+			}
+			if suffixNeeded {
+				base := SafeFileName(m.Name)
+				ext := filepath.Ext(base)
+				stem := base[:len(base)-len(ext)]
+				dst = filepath.Join(dir, fmt.Sprintf("%s-%s%s", stem, m.ID[:6], ext))
+			}
 		}
 		f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 		if err != nil {
@@ -149,4 +165,21 @@ var _ = bufio.NewReader
 
 func sha256New() hash.Hash {
 	return sha256.New()
+}
+
+// fileSHA256 returns the lowercase hex SHA-256 of a file. Used to decide
+// whether an existing receiver file already has the same content as an
+// incoming FileMeta; if so we can reuse the path without adding a -<id>
+// suffix.
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
