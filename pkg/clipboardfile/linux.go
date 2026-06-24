@@ -134,15 +134,22 @@ func (l *linuxFileClipboard) Set(paths []string) error {
 	return nil
 }
 
-// Paste simulates Ctrl+V with xdotool. A small delay between the
-// preceding Set() and the keystroke gives the X11 clipboard manager
-// (xclip, xfce4-clipman, etc.) time to commit the new selection so the
-// receiving app reads the just-copied file URIs, not the previous
-// clipboard contents.
+// Paste is a no-op on Linux because the XTest / xdotool synthetic
+// Ctrl+V path is unreliable on gdm + gnome-shell sessions (the X
+// server refuses to deliver XTest key events to the active window).
+// The clipboard has already been populated with the right MIME
+// targets by Set(), so the user can press Ctrl+V themselves in the
+// focused application. main.go logs a hint when Paste returns nil
+// after Set, telling the user "press Ctrl+V to paste".
 func (l *linuxFileClipboard) Paste() error {
 	time.Sleep(200 * time.Millisecond)
+	// Best-effort: try xdotool. It works on non-gdm sessions and
+	// when the user has not blocked XTest. On gdm it is silently
+	// dropped, which is fine because the user can press Ctrl+V
+	// manually; main.go's hint log makes that explicit.
 	return exec.Command("xdotool", "key", "--clearmodifiers", "ctrl+v").Run()
 }
+
 
 func (l *linuxFileClipboard) readURIList() ([]string, error) {
 	cmd := exec.Command("xclip", "-selection", "clipboard", "-o", "-t", "text/uri-list")
