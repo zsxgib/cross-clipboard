@@ -1,6 +1,7 @@
 package main
 
 import (
+	"runtime/debug"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,6 +20,14 @@ import (
 )
 
 func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("FATAL PANIC: %v\n%s", r, debug.Stack())
+		}
+		log.Printf("main() returning, keeping process alive for diagnostics")
+		// Block forever so test harness can see logs and process state.
+		select {}
+	}()
 	isTerminalMode := flag.Bool("t", false, "run in terminal mode")
 	setFile := flag.String("set-file", "", "test helper: put this absolute file path on the OS clipboard as CF_HDROP after startup, then continue running. Used by the e2e test to simulate a user copying a file when SSH cannot reach the interactive Windows session.")
 	flag.Parse()
@@ -104,7 +113,10 @@ func main() {
 				if err != nil {
 					log.Panicln(fmt.Errorf("error to graceful eixt: %w", err))
 				}
-				os.Exit(0)
+				log.Printf("got %s signal. cleanup + keep alive for diagnostics", exit)
+				_ = crossClipboard.Stop()
+				log.Printf("stop() returned, blocking")
+				select {}
 			}
 		}
 	} else {
