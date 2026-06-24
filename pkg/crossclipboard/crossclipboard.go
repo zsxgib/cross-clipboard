@@ -381,7 +381,7 @@ func (cc *CrossClipboard) dispatchFileURIs(paths []string, dedup *filetransfer.D
 	for _, srcPath := range paths {
 		for _, dv := range peers {
 			dv := dv
-			cc.LogChan <- fmt.Sprintf("dispatchFileURIs: queuing %s -> %s status=%d", srcPath, shortID(dv.AddressInfo.ID.String()), dv.Status)
+			cc.LogChan <- fmt.Sprintf("dispatchFileURIs: queuing %s -> %s status=%s", srcPath, shortID(dv.AddressInfo.ID.String()), dv.Status)
 			go cc.sendOneFile(dv, srcPath, dedup)
 		}
 	}

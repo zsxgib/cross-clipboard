@@ -158,7 +158,14 @@ func (l *linuxFileClipboard) Paste() error {
 	// Best-effort: try xdotool. Works on non-gdm sessions. On gdm it
 	// is silently dropped, which is fine because the user can press
 	// Ctrl+V manually; main.go's hint log makes that explicit.
-	return exec.Command("xdotool", "key", "--clearmodifiers", "ctrl+v").Run()
+	cmd := exec.Command("xdotool", "key", "--clearmodifiers", "ctrl+v")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		log.Printf("xdotool rc=%v stderr=%q", err, strings.TrimSpace(stderr.String()))
+	}
+	return err
 }
 
 func (l *linuxFileClipboard) readURIList() ([]string, error) {
