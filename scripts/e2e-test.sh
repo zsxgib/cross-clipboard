@@ -197,7 +197,11 @@ WIN_SRC_MD5=$(run_win_ps "(Get-FileHash '$WIN_SRC' -Algorithm MD5).Hash" 2>&1 | 
 echo "  source: $WIN_SRC md5=$WIN_SRC_MD5"
 
 LINUX_BEFORE_LINES=$(wc -l < "$LINUX_LOG")
-run_win_ps "Start-Process -FilePath 'C:\Program Files\Git\usr\local\bin\cross-clipboard.exe' -ArgumentList @('-t','-set-file','$WIN_SRC') -NoNewWindow -PassThru | Out-Null; Write-Host 'SET'" 2>&1 | tail -1
+# Stop the cc_runner-launched watcher so our -set-file binary can
+# bind port 4002 without conflict. Then start a one-shot binary
+# that sets the clipboard via -set-file, wait for the set, then
+# taskkill the one-shot and let cc_runner restart the watcher.
+run_win_ps "Get-Process -Name cmd -ErrorAction SilentlyContinue | Where-Object { \$_.CommandLine -like '*cc_runner*' } | Stop-Process -Force; taskkill /F /IM cross-clipboard.exe 2>\$null; Start-Sleep 2; \$p = Start-Process -FilePath 'C:\Program Files\Git\usr\local\bin\cross-clipboard.exe' -ArgumentList @('-t','-set-file','$WIN_SRC') -NoNewWindow -RedirectStandardOutput 'C:\Users\Administrator\AppData\Local\Temp\cross-clipboard\logs\win-test.out' -RedirectStandardError 'C:\Users\Administrator\AppData\Local\Temp\cross-clipboard\logs\win-test.err' -PassThru; Start-Sleep 2; Write-Host 'SET'" 2>&1 | tail -1
 
 if wait_log_match "$LINUX_LOG" "received file: $(basename $WIN_SRC | sed 's|\\.bin$|.*bin|') .* from 12D3KooW" 60; then
   echo "  Linux received file"
