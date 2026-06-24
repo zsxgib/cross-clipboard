@@ -82,21 +82,25 @@ func (l *linuxFileClipboard) Set(paths []string) error {
 	}
 	plain := uriList.String()
 
-	// xclip with multiple -t flags populates all targets in one process.
-	// The payloads must be concatenated to stdin in the same order as the
-	// -t flags; xclip assigns stdin bytes to each target sequentially.
-	args := []string{"-selection", "clipboard",
-		"-t", "x-special/gnome-copied-files",
-		"-t", "text/uri-list",
-		"-t", "text/plain",
+	// Call xclip once per target. A single xclip invocation with
+	// multiple -t flags does NOT populate each target with the full
+	// stdin; it slices stdin bytes sequentially across targets in the
+	// order given, so the same content goes into one target and the
+	// wrong slice into the others. Three separate calls guarantee
+	// each target receives the full plain payload.
+	targets := []string{
+		"x-special/gnome-copied-files",
+		"text/uri-list",
+		"text/plain",
 	}
-	cmd := exec.Command("xclip", args...)
-	var stdin bytes.Buffer
-	stdin.WriteString(plain) // gnome-copied-files
-	stdin.WriteString(plain) // text/uri-list
-	stdin.WriteString(plain) // text/plain
-	cmd.Stdin = &stdin
-	return cmd.Run()
+	for _, t := range targets {
+		cmd := exec.Command("xclip", "-selection", "clipboard", "-t", t)
+		cmd.Stdin = strings.NewReader(plain)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("xclip -t %s: %w", t, err)
+		}
+	}
+	return nil
 }
 
 // Paste simulates Ctrl+V with xdotool.
