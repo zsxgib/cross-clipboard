@@ -93,8 +93,12 @@ echo "  source: $TEST1 md5=$SRC_MD5"
 LINUX_LINES_BEFORE=$(wc -l < "$LINUX_LOG")
 WIN_LINES_BEFORE=$(run_win_ps "(Get-Content '$WIN_LOG' | Measure-Object).Count" 2>&1 | tail -1 | tr -d ' ')
 
-printf "file://%s\n" "$TEST1" | DISPLAY=:1 xclip -selection clipboard \
-  -t x-special/gnome-copied-files -t text/uri-list -t text/plain
+# Use the long-lived PyQt5 helper so all three MIME targets survive
+# (xclip 3 sequential calls leave only text/plain as the selection owner).
+# The helper stays alive (Qt event loop) until we kill it.
+setsid python3 /tmp/x11_fileclip_helper.py "$TEST1" </dev/null >/dev/null 2>&1 &
+HELPER_PID=$!
+sleep 1
 
 if wait_log_match "$LINUX_LOG" "sending file: $(basename $TEST1) size=1024" 15 \
   && wait_log_match "$LINUX_LOG" "sent file: $(basename $TEST1)" 15; then
@@ -143,8 +147,9 @@ dd if=/dev/urandom of="$TEST2" bs=1M count=100 2>/dev/null
 SRC_MD5=$(md5sum "$TEST2" | awk '{print $1}')
 echo "  source: $TEST2 md5=$SRC_MD5"
 
-printf "file://%s\n" "$TEST2" | DISPLAY=:1 xclip -selection clipboard \
-  -t x-special/gnome-copied-files -t text/uri-list -t text/plain
+setsid python3 /tmp/x11_fileclip_helper.py "$TEST2" </dev/null >/dev/null 2>&1 &
+HELPER_PID2=$!
+sleep 1
 
 T0=$(date +%s)
 if wait_log_match "$LINUX_LOG" "sent file: $(basename $TEST2)" 60; then
@@ -192,7 +197,7 @@ WIN_SRC_MD5=$(run_win_ps "(Get-FileHash '$WIN_SRC' -Algorithm MD5).Hash" 2>&1 | 
 echo "  source: $WIN_SRC md5=$WIN_SRC_MD5"
 
 LINUX_BEFORE_LINES=$(wc -l < "$LINUX_LOG")
-run_win_ps "Add-Type -AssemblyName System.Windows.Forms; \$col = New-Object System.Collections.Specialized.StringCollection; \$col.Add('$WIN_SRC'.Replace('\\\\','\\')); [System.Windows.Forms.Clipboard]::SetFileDropList(\$col); Write-Host 'SET'" 2>&1 | tail -1
+run_win_ps "Start-Process -FilePath 'C:\Program Files\Git\usr\local\bin\cross-clipboard.exe' -ArgumentList @('-t','-set-file','$WIN_SRC') -NoNewWindow -PassThru | Out-Null; Write-Host 'SET'" 2>&1 | tail -1
 
 if wait_log_match "$LINUX_LOG" "received file: $(basename $WIN_SRC | sed 's|\\.bin$|.*bin|') .* from 12D3KooW" 60; then
   echo "  Linux received file"
