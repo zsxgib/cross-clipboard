@@ -163,11 +163,15 @@ disconnect:
 			dv.UpdateFromProtobuf(deviceData)
 
 			if dv.PgpEncrypter == nil {
-				dv.Status = device.StatusPending
-
 				if s.config.AutoTrust {
-					dv.Trust()
-					s.logChan <- fmt.Sprintf("trusted %s by auto trust", deviceData.Name)
+					if err := dv.Trust(); err != nil {
+						s.errorChan <- xerror.NewRuntimeErrorf("auto-trust failed for %s: %v", deviceData.Name, err)
+						dv.Status = device.StatusPending
+					} else {
+						s.logChan <- fmt.Sprintf("trusted %s by auto trust", deviceData.Name)
+					}
+				} else {
+					dv.Status = device.StatusPending
 				}
 			} else {
 				dv.Status = device.StatusConnected
