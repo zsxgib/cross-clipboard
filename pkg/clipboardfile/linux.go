@@ -79,9 +79,13 @@ func (l *linuxFileClipboard) Set(paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
+	// User-requested: drop the file:// scheme prefix.
+	// text/uri-list and text/plain now carry the bare absolute path
+	// (one per line).
 	var uriList bytes.Buffer
 	for _, p := range paths {
-		fmt.Fprintf(&uriList, "file://%s\n", p)
+		uriList.WriteString(p)
+		uriList.WriteByte('\n')
 	}
 	plain := uriList.String()
 
@@ -115,8 +119,12 @@ func (l *linuxFileClipboard) Set(paths []string) error {
 			// Final target: stay alive to hold the selection
 			loops = "100"
 		}
+		// All three targets (x-special/gnome-copied-files,
+		// text/uri-list, text/plain) carry the bare absolute path
+		// (no file:// prefix) per user direction.
+		payload := plain
 		cmd := exec.Command("xclip", "-selection", "clipboard", "-loops", loops, "-t", t)
-		cmd.Stdin = strings.NewReader(plain)
+		cmd.Stdin = strings.NewReader(payload)
 		var err error
 		if i == len(targets)-1 {
 			err = cmd.Start()
