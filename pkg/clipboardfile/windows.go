@@ -101,14 +101,11 @@ func (w *windowsFileClipboard) readFileDropListDirectNative() (paths []string, s
 	// 1) Get sequence number first - always works, no clipboard lock needed
 	r1, _, _ := procGetSeqNum.Call()
 	seq = uint32(r1)
-	// DEBUG
-	log.Printf("file-watcher-debug: seq=%d", seq)
 
 	// 2) Try to open clipboard (may fail if another process holds it)
 	r2, _, _ := procOpenClipboard.Call(0)
 	if r2 == 0 {
 		// Clipboard busy; return empty list but valid seq so caller knows it changed
-		log.Printf("file-watcher-debug: OpenClipboard FAILED (busy) seq=%d", seq)
 		return nil, seq, nil
 	}
 	defer procCloseClipboard.Call()
@@ -129,8 +126,7 @@ func (w *windowsFileClipboard) readFileDropListDirectNative() (paths []string, s
 				for n < 64 && wide[n] != 0 {
 					n++
 				}
-				log.Printf("file-watcher-debug: seq=%d CF_HDROP=0 CF_UNICODETEXT=%q", seq, windows.UTF16ToString(wide[:n]))
-			}
+				}
 		}
 		return nil, seq, nil
 	}
