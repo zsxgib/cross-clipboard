@@ -22,7 +22,6 @@ func main() {
 	isTerminalMode := flag.Bool("t", false, "run in terminal mode")
 	setFile := flag.String("set-file", "", "test helper: put this absolute file path on the OS clipboard as CF_HDROP after startup, then continue running. Used by the e2e test to simulate a user copying a file when SSH cannot reach the interactive Windows session.")
 	flag.Parse()
-	log.Printf("DEBUG: setFile flag raw=%q isTerminalMode=%v", *setFile, isTerminalMode != nil && *isTerminalMode)
 
 	cfg, err := config.LoadConfig()
 	if err != nil {

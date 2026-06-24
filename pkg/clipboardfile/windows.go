@@ -300,18 +300,15 @@ func (w *windowsFileClipboard) Set(paths []string) error {
 	procSetClipboardData := user32.NewProc("SetClipboardData")
 	procEmptyClipboard := user32.NewProc("EmptyClipboard")
 
-	log.Printf("set-file: building DROPFILES for %d paths, total=%d", len(paths), total)
 	// GMEM_MOVEABLE = 0x0002, GMEM_ZEROINIT = 0x0040
 	hMem, _, _ := procGlobalAlloc.Call(0x0042, uintptr(total))
 	if hMem == 0 {
 		return fmt.Errorf("GlobalAlloc failed")
 	}
-	log.Printf("set-file: GlobalAlloc hMem=0x%x", hMem)
 	ptr, _, _ := procGlobalLock.Call(hMem)
 	if ptr == 0 {
 		return fmt.Errorf("GlobalLock failed")
 	}
-	log.Printf("set-file: GlobalLock ptr=0x%x", ptr)
 	// pFiles = sizeOfDrop (offset to file list)
 	*(*uint32)(unsafe.Pointer(ptr)) = uint32(sizeOfDrop)
 	// pt.x, pt.y, fNC = 0
@@ -326,19 +323,14 @@ func (w *windowsFileClipboard) Set(paths []string) error {
 	procGlobalUnlock.Call(hMem)
 
 	// Open, empty, set, close
-	log.Printf("set-file: calling OpenClipboard")
 	r1, _, _ := procOpenClipboard.Call(0)
-	log.Printf("set-file: OpenClipboard r1=%d", r1)
 	if r1 == 0 {
 		return fmt.Errorf("OpenClipboard failed")
 	}
 	defer procCloseClipboard.Call()
-	log.Printf("set-file: calling EmptyClipboard")
 	procEmptyClipboard.Call()
 	// CF_HDROP = 15
-	log.Printf("set-file: calling SetClipboardData CF_HDROP=15")
 	hRet, _, _ := procSetClipboardData.Call(15, hMem)
-	log.Printf("set-file: SetClipboardData hRet=0x%x", hRet)
 	if hRet == 0 {
 		return fmt.Errorf("SetClipboardData failed")
 	}
