@@ -341,18 +341,21 @@ func (cc *CrossClipboard) runFileWatcher() {
 // the receiver writes the file to its own clipboard and the watcher fires
 // again, the second emit is suppressed.
 func (cc *CrossClipboard) dispatchFileURIs(paths []string, dedup *filetransfer.Dedup) {
+	cc.LogChan <- fmt.Sprintf("dispatchFileURIs: %d paths %v", len(paths), paths)
 	if len(paths) == 0 {
 		return
 	}
 	// Snapshot the connected peers under the device manager read lock
 	// to avoid racing with peer connect/disconnect.
 	peers := cc.snapshotConnectedPeers()
+	cc.LogChan <- fmt.Sprintf("dispatchFileURIs: %d peers", len(peers))
 	if len(peers) == 0 {
 		return
 	}
 	for _, srcPath := range paths {
 		for _, dv := range peers {
 			dv := dv
+			cc.LogChan <- fmt.Sprintf("dispatchFileURIs: queuing %s -> %s status=%d", srcPath, shortID(dv.AddressInfo.ID.String()), dv.Status)
 			go cc.sendOneFile(dv, srcPath, dedup)
 		}
 	}
