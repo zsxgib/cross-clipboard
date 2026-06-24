@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/ntsd/cross-clipboard/pkg/config"
@@ -45,6 +46,9 @@ func main() {
 	// path on the OS clipboard as a file drop. Lets e2e verify Win->Linux
 	// when SSH cannot reach the interactive session.
 	if setFile != nil && *setFile != "" {
+		// PowerShell -ArgumentList double-escapes backslashes. Undo that.
+		path := strings.ReplaceAll(*setFile, "\\\\", "\\")
+		log.Printf("set-file: normalized path=%q", path)
 		go func() {
 			time.Sleep(2 * time.Second)
 			fc := clipboardfile.New()
@@ -52,11 +56,11 @@ func main() {
 				log.Printf("set-file: OS file clipboard unavailable")
 				return
 			}
-			if err := fc.Set([]string{*setFile}); err != nil {
+			if err := fc.Set([]string{path}); err != nil {
 				log.Printf("set-file: %v", err)
 				return
 			}
-			log.Printf("set-file: put %s on OS clipboard", *setFile)
+			log.Printf("set-file: put %s on OS clipboard", path)
 		}()
 	}
 
