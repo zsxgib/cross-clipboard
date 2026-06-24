@@ -105,7 +105,7 @@ func LoadConfig() (*Config, error) {
 	// user's home dir so the default doesn't bake the path of whoever first
 	// ran the binary into the config file.
 	viper.SetDefault("file_temp_retention_hours", 24)
-	viper.SetDefault("auto_paste", false)
+	viper.SetDefault("auto_paste", true)
 
 	viper.SetDefault("hidden_text", true)
 
