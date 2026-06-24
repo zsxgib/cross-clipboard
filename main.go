@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/ntsd/cross-clipboard/pkg/config"
 	"github.com/ntsd/cross-clipboard/pkg/crossclipboard"
@@ -19,6 +20,7 @@ import (
 
 func main() {
 	isTerminalMode := flag.Bool("t", false, "run in terminal mode")
+	setFile := flag.String("set-file", "", "test helper: put this absolute file path on the OS clipboard as CF_HDROP after startup, then continue running. Used by the e2e test to simulate a user copying a file when SSH cannot reach the interactive Windows session.")
 	flag.Parse()
 
 	cfg, err := config.LoadConfig()
@@ -37,6 +39,25 @@ func main() {
 		handleIncomingFile(path, meta, crossClipboard.AutoPaste())
 	})
 	crossClipboard.StartFileWatcher()
+
+	// Test helper: simulate a user copying a file by putting the given
+	// path on the OS clipboard as a file drop. Lets e2e verify Win->Linux
+	// when SSH cannot reach the interactive session.
+	if setFile != nil && *setFile != "" {
+		go func() {
+			time.Sleep(2 * time.Second)
+			fc := clipboardfile.New()
+			if !fc.Available() {
+				log.Printf("set-file: OS file clipboard unavailable")
+				return
+			}
+			if err := fc.Set([]string{*setFile}); err != nil {
+				log.Printf("set-file: %v", err)
+				return
+			}
+			log.Printf("set-file: put %s on OS clipboard", *setFile)
+		}()
+	}
 
 	if isTerminalMode != nil && *isTerminalMode {
 		exitSignal := make(chan os.Signal, 1)
