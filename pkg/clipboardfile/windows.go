@@ -102,17 +102,13 @@ func (w *windowsFileClipboard) readFileDropListDirectNative() (paths []string, s
 	r1, _, _ := procGetSeqNum.Call()
 	seq = uint32(r1)
 	// DEBUG
-	if seq != 0 && seq%50 == 0 {
-		log.Printf("file-watcher-debug: seq=%d", seq)
-	}
+	log.Printf("file-watcher-debug: seq=%d", seq)
 
 	// 2) Try to open clipboard (may fail if another process holds it)
 	r2, _, _ := procOpenClipboard.Call(0)
 	if r2 == 0 {
 		// Clipboard busy; return empty list but valid seq so caller knows it changed
-		if seq != 0 && seq%50 == 0 {
-			log.Printf("file-watcher-debug: OpenClipboard failed (busy) seq=%d", seq)
-		}
+		log.Printf("file-watcher-debug: OpenClipboard FAILED (busy) seq=%d", seq)
 		return nil, seq, nil
 	}
 	defer procCloseClipboard.Call()
@@ -122,7 +118,7 @@ func (w *windowsFileClipboard) readFileDropListDirectNative() (paths []string, s
 	if hDrop == 0 {
 		// Try CF_UNICODETEXT to know if clipboard is empty or just no file
 		hText, _, _ := procGetClipboardData.Call(13) // CF_UNICODETEXT
-		if hText != 0 && seq != 0 && seq%20 == 0 {
+		if hText != 0 {
 			// Read a few bytes for debug
 			pPtr, _, _ := procGlobalLock.Call(hText)
 			if pPtr != 0 {
