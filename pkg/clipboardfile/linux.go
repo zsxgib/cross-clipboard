@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os/exec"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 )
 
@@ -89,15 +91,43 @@ func (l *linuxFileClipboard) Set(paths []string) error {
 	// order given, so the same content goes into one target and the
 	// wrong slice into the others. Three separate calls guarantee
 	// each target receives the full plain payload.
+	// Set the three MIME targets one at a time, but keep the *last*
+	// xclip process alive in the background so it holds the clipboard
+	// selection. Each xclip invocation with -loops 0 sets the target
+	// and then exits, which transfers selection ownership to the next
+	// xclip call. By keeping the last xclip alive with -loops we
+	// guarantee the receiving app sees all three targets when it
+	// converts the selection.
+	//
+	// If a previous Set is still holding the clipboard, kill it first
+	// so the new xclip can take ownership cleanly.
+	if prev := prevXclipPID(); prev > 0 {
+		_ = syscall.Kill(prev, syscall.SIGTERM)
+	}
 	targets := []string{
 		"x-special/gnome-copied-files",
 		"text/uri-list",
 		"text/plain",
 	}
-	for _, t := range targets {
-		cmd := exec.Command("xclip", "-selection", "clipboard", "-t", t)
+	for i, t := range targets {
+		loops := "0"
+		if i == len(targets)-1 {
+			// Final target: stay alive to hold the selection
+			loops = "100"
+		}
+		cmd := exec.Command("xclip", "-selection", "clipboard", "-loops", loops, "-t", t)
 		cmd.Stdin = strings.NewReader(plain)
-		if err := cmd.Run(); err != nil {
+		var err error
+		if i == len(targets)-1 {
+			err = cmd.Start()
+			if err == nil {
+				setPrevXclipPID(cmd.Process.Pid)
+				go func() { _ = cmd.Wait() }()
+			}
+		} else {
+			err = cmd.Run()
+		}
+		if err != nil {
 			return fmt.Errorf("xclip -t %s: %w", t, err)
 		}
 	}
@@ -122,6 +152,30 @@ func (l *linuxFileClipboard) readURIList() ([]string, error) {
 		return nil, err
 	}
 	return parseURIList(string(out)), nil
+}
+
+// --- background xclip PID tracking ------------------------------------
+//
+// When Set() is called repeatedly, only the most recent xclip should
+// remain holding the clipboard selection. We track the last xclip
+// process PID in a package-level variable and SIGTERM it on the next
+// Set, so two stale xclip processes don't fight for ownership.
+
+var (
+	xclipMu  sync.Mutex
+	xclipPID int
+)
+
+func setPrevXclipPID(pid int) {
+	xclipMu.Lock()
+	xclipPID = pid
+	xclipMu.Unlock()
+}
+
+func prevXclipPID() int {
+	xclipMu.Lock()
+	defer xclipMu.Unlock()
+	return xclipPID
 }
 
 // parseURIList accepts `file://` URIs only. Lines that do not start with

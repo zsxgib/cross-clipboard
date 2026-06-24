@@ -101,7 +101,14 @@ func handleIncomingFile(path string, meta *filetransfer.FileMeta, autoPaste bool
 		log.Printf("auto-paste disabled; leaving %s on the clipboard", meta.Name)
 		return
 	}
+	// Auto-paste via xdotool. On some X11 sessions (gdm, rootless,
+	// gnome-shell with focus-stealing-prevention) the X server refuses
+	// to deliver synthetic key events to the focused window, so this
+	// keystroke is silently dropped and the user has to press Ctrl+V
+	// themselves. We log the action and a hint so it's obvious when
+	// the simulated paste is not effective.
 	if err := fc.Paste(); err != nil {
 		log.Printf("failed to simulate Ctrl+V for %s: %v", meta.Name, err)
 	}
+	log.Printf("(if the file did not appear in the focused window, press Ctrl+V manually \u2014 xdotool XTest may be blocked by your X server)")
 }
