@@ -62,6 +62,15 @@ func NewStreamHandler(
 func (s *StreamHandler) HandleStream(stream network.Stream) {
 	s.logChan <- fmt.Sprintf("peer %s connecting to this host", stream.Conn().RemotePeer())
 
+	// If a concurrent outbound dial already added a device for this
+	// peer, the inbound stream is the duplicate: close it and bail.
+	peerID := stream.Conn().RemotePeer()
+	if existing := s.deviceManager.GetDevice(peerID.String()); existing != nil && existing.Status == device.StatusConnected && existing.Stream != nil {
+		s.logChan <- fmt.Sprintf("inbound from %s is duplicate of existing outbound; closing", peerID)
+		_ = stream.Close()
+		return
+	}
+
 	// Create a new peer
 	dv := device.NewDevice(peer.AddrInfo{
 		ID:    stream.Conn().RemotePeer(),

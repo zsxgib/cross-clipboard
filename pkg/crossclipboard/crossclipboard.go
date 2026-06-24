@@ -177,7 +177,21 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 					continue
 				}
 
-				if dv == nil {
+				// Check the latest device in the manager under the device
+				// manager lock. If a concurrent inbound stream already
+				// added a device for this peer id, reuse its stream and
+				// PGP key instead of replacing with a new outbound
+				// stream; this avoids the two-readers-one-peer deadlock
+				// where one side writes the size header while the other
+				// is reading the size header and they corrupt each
+				// other's frame stream.
+				existing := cc.DeviceManager.GetDevice(peerInfo.ID.String())
+				if existing != nil && existing.Status == device.StatusConnected && existing.Stream != nil {
+					cc.LogChan <- fmt.Sprintf("reusing inbound stream for %s, closing outbound", peerInfo.ID)
+					_ = stream.Close()
+					stream = existing.Stream
+					dv = existing
+				} else if dv == nil {
 					dv = device.NewDevice(peerInfo, stream)
 				} else {
 					dv.AddressInfo = peerInfo
@@ -187,7 +201,9 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 				}
 
 				cc.DeviceManager.UpdateDevice(dv)
-				go streamHandler.CreateReadData(dv.Reader, dv)
+				if existing == nil || existing.Status != device.StatusConnected {
+					go streamHandler.CreateReadData(dv.Reader, dv)
+				}
 
 				cc.LogChan <- fmt.Sprintf("connected to peer host: %s", peerInfo)
 			case <-cc.stopDiscovery: // when stop discovery
@@ -350,7 +366,17 @@ func (cc *CrossClipboard) dispatchFileURIs(paths []string, dedup *filetransfer.D
 	peers := cc.snapshotConnectedPeers()
 	cc.LogChan <- fmt.Sprintf("dispatchFileURIs: %d peers", len(peers))
 	if len(peers) == 0 {
-		return
+		// Wait up to 5s for the P2P handshake to complete. Handles the
+		// race where the user copies a file right after launching the
+		// binary, before mDNS discover + stream handshake finished.
+		for i := 0; i < 25 && len(peers) == 0; i++ {
+			time.Sleep(200 * time.Millisecond)
+			peers = cc.snapshotConnectedPeers()
+		}
+		cc.LogChan <- fmt.Sprintf("dispatchFileURIs: after wait %d peers", len(peers))
+		if len(peers) == 0 {
+			return
+		}
 	}
 	for _, srcPath := range paths {
 		for _, dv := range peers {

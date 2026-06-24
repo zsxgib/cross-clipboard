@@ -8,7 +8,9 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"io"
 	"strings"
+	"time"
 
 	"github.com/ntsd/cross-clipboard/pkg/config"
 	"github.com/ntsd/cross-clipboard/pkg/crossclipboard"
@@ -30,7 +32,26 @@ func main() {
 	}()
 	isTerminalMode := flag.Bool("t", false, "run in terminal mode")
 	setFile := flag.String("set-file", "", "test helper: put this absolute file path on the OS clipboard as CF_HDROP after startup, then continue running. Used by the e2e test to simulate a user copying a file when SSH cannot reach the interactive Windows session.")
+	triggerFile := flag.String("trigger-file", "", "test helper: poll this file every 500ms; when its content is a path, put it on the OS clipboard as CF_HDROP, then truncate the file. Lets an e2e test trigger a copy on a long-running daemon via a write-only side channel.")
 	flag.Parse()
+
+	// Optional: tee all log output to a file. Used by the e2e test to
+	// capture Win daemon logs when the binary is launched via a
+	// scheduled task that does not have a usable stderr handle.
+	var logFileHandle *os.File
+	if logFile := os.Getenv("CROSS_CLIPBOARD_LOG_FILE"); logFile != "" {
+		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			logFileHandle = f
+			log.SetOutput(io.MultiWriter(os.Stderr, f))
+			log.Printf("main: log file = %s", logFile)
+		}
+	}
+	defer func() {
+		if logFileHandle != nil {
+			logFileHandle.Close()
+		}
+	}()
 
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -48,6 +69,11 @@ func main() {
 		handleIncomingFile(path, meta, crossClipboard.AutoPaste())
 	})
 	crossClipboard.StartFileWatcher()
+
+	// Test helper: poll a trigger file for a path to put on the OS clipboard.
+	if triggerFile != nil && *triggerFile != "" {
+		go runTriggerWatcher(*triggerFile, crossClipboard.LogChan)
+	}
 
 	// Test helper: simulate a user copying a file by putting the given
 	// path on the OS clipboard as a file drop. Lets e2e verify Win->Linux
@@ -85,7 +111,11 @@ func main() {
 			case err := <-crossClipboard.ErrorChan:
 				var fatalErr *xerror.FatalError
 				if errors.As(err, &fatalErr) {
-					log.Fatal(fmt.Errorf("fatal error: %w", fatalErr))
+					// Fatal errors are reported but the daemon keeps
+					// running so the e2e test harness can inspect
+					// state and the user can restart the connection.
+					log.Printf("fatal error (keeping process alive): %v", fatalErr)
+					continue
 				}
 				log.Println(fmt.Errorf("runtime error: %w", err))
 			case <-crossClipboard.ClipboardManager.ClipboardsHistoryUpdated:
@@ -150,4 +180,38 @@ func handleIncomingFile(path string, meta *filetransfer.FileMeta, autoPaste bool
 		log.Printf("failed to simulate Ctrl+V for %s: %v", meta.Name, err)
 	}
 	log.Printf("(if the file did not appear in the focused window, press Ctrl+V manually \u2014 xdotool XTest may be blocked by your X server)")
+}
+
+// runTriggerWatcher polls a side-channel file for a path. When the file
+// contains a non-empty path, the watcher puts that path on the OS
+// clipboard as a file drop, then truncates the file. This lets an e2e
+// test trigger a copy on a long-running Win daemon via a write-only
+// side channel (the test never needs to drive the GUI session).
+func runTriggerWatcher(triggerPath string, logChan chan string) {
+	for {
+		time.Sleep(500 * time.Millisecond)
+		data, err := os.ReadFile(triggerPath)
+		if err != nil {
+			continue
+		}
+		p := strings.TrimSpace(string(data))
+		if p == "" {
+			continue
+		}
+		// Truncate first so concurrent reads don't see the same value.
+		if err := os.WriteFile(triggerPath, nil, 0644); err != nil {
+			logChan <- fmt.Sprintf("trigger: truncate %s failed: %v", triggerPath, err)
+			continue
+		}
+		fc := clipboardfile.New()
+		if !fc.Available() {
+			logChan <- fmt.Sprintf("trigger: OS file clipboard unavailable")
+			continue
+		}
+		if err := fc.Set([]string{p}); err != nil {
+			logChan <- fmt.Sprintf("trigger: set %s failed: %v", p, err)
+			continue
+		}
+		logChan <- fmt.Sprintf("trigger: put %s on OS clipboard", p)
+	}
 }
