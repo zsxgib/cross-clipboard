@@ -49,10 +49,16 @@ func main() {
 		// PowerShell -ArgumentList double-escapes backslashes. Undo that.
 		path := strings.ReplaceAll(*setFile, "\\\\", "\\")
 		log.Printf("set-file: normalized path=%q", path)
-		go func() {
-			log.Printf("set-file: goroutine started, will sleep 2s then Set %q", path)
-			time.Sleep(2 * time.Second)
-			log.Printf("set-file: sleep done, calling New()")
+		// Use time.AfterFunc so the timer fires on its own goroutine
+		// without depending on the main for-select loop scheduling the
+		// time.Sleep goroutine. Empirically, when the main loop is
+		// tightly parked in `for { select {} }` polling libp2p host
+		// channels, a separate goroutine blocked in time.Sleep(2s) does
+		// not get a tick. time.AfterFunc runs on a dedicated timer
+		// goroutine owned by the runtime.
+		log.Printf("set-file: scheduling AfterFunc 2s, path=%q", path)
+		time.AfterFunc(2*time.Second, func() {
+			log.Printf("set-file: AfterFunc fired, calling New()")
 			fc := clipboardfile.New()
 			log.Printf("set-file: New() returned, Available=%v", fc.Available())
 			if !fc.Available() {
@@ -64,7 +70,7 @@ func main() {
 				return
 			}
 			log.Printf("set-file: put %s on OS clipboard", path)
-		}()
+		})
 	}
 
 	if isTerminalMode != nil && *isTerminalMode {
