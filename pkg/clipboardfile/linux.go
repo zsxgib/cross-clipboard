@@ -4,9 +4,11 @@ package clipboardfile
 
 import (
 	"bytes"
+	"encoding/json"
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -14,7 +16,15 @@ import (
 	"time"
 )
 
-// linuxFileClipboard implements FileClipboard using xclip + xdotool.
+// linuxFileClipboard implements FileClipboard using a long-lived PyQt5
+// helper process as the X11 selection owner. The helper (see
+// scripts/x11_fileclip_helper.py) creates a single QMimeData with all
+// MIME targets populated and hands it to QClipboard::setMimeData. Because
+// one process owns the selection, every target (x-special/gnome-copied-files,
+// text/uri-list, text/plain) survives intact until a new Set replaces the
+// payload. This fixes the race where 3 sequential xclip calls left only
+// the last -t's content visible (only the last xclip owned the selection,
+// earlier targets were empty).
 type linuxFileClipboard struct{}
 
 // New returns a FileClipboard for the current OS.
@@ -23,9 +33,16 @@ func New() FileClipboard {
 }
 
 func (l *linuxFileClipboard) Available() bool {
-	_, errXclip := exec.LookPath("xclip")
-	_, errXdotool := exec.LookPath("xdotool")
-	return errXclip == nil && errXdotool == nil
+	if _, err := os.Stat("/tmp/x11_fileclip_helper.py"); err != nil {
+		return false
+	}
+	if _, err := exec.LookPath("xclip"); err != nil {
+		return false
+	}
+	if _, err := exec.LookPath("xdotool"); err != nil {
+		return false
+	}
+	return true
 }
 
 // Watch polls xclip every PollingInterval. It only emits when the set of
@@ -61,85 +78,71 @@ func (l *linuxFileClipboard) Watch(ctx context.Context) <-chan []string {
 	return out
 }
 
-// Set writes file:// URIs to the system clipboard using xclip.
+// Set writes file URIs to the system clipboard using a long-lived PyQt5
+// helper as the selection owner. The helper holds one selection and
+// serves three MIME targets from a single QMimeData:
 //
-// Populates three MIME types so GNOME / KDE / X11 file managers and other
-// apps recognize the clipboard as a "copied file" and accept Ctrl+V as a
-// file paste:
+//   - x-special/gnome-copied-files  : "copy\nfile:///abs/path\n" (Nautilus)
+//   - text/uri-list                 : "file:///abs/path\n" (Dolphin, etc.)
+//   - text/plain                    : "/abs/path\n" (apps that only read STRING)
 //
-//   * x-special/gnome-copied-files -- Nautilus / GNOME Files primary signal
-//   * text/uri-list                 -- POSIX standard fallback (Dolphin,
-//                                      PCManFM, Firefox, Chrome, etc.)
-//   * text/plain                    -- safety net for apps that only
-//                                      request STRING
-//
-// Without x-special/gnome-copied-files, Nautilus ignores the clipboard
-// when Ctrl+V is pressed and the file does not get pasted.
+// Without the gnome target, Nautilus ignores the clipboard on Ctrl+V.
+// The helper stays alive (sleep loop) until killed, so we keep its PID
+// and SIGTERM the previous one before launching a new helper.
 func (l *linuxFileClipboard) Set(paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	// User-requested: drop the file:// scheme prefix.
-	// text/uri-list and text/plain now carry the bare absolute path
-	// (one per line).
-	var uriList bytes.Buffer
-	for _, p := range paths {
-		uriList.WriteString(p)
-		uriList.WriteByte('\n')
-	}
-	plain := uriList.String()
-
-	// Call xclip once per target. A single xclip invocation with
-	// multiple -t flags does NOT populate each target with the full
-	// stdin; it slices stdin bytes sequentially across targets in the
-	// order given, so the same content goes into one target and the
-	// wrong slice into the others. Three separate calls guarantee
-	// each target receives the full plain payload.
-	// Set the three MIME targets one at a time, but keep the *last*
-	// xclip process alive in the background so it holds the clipboard
-	// selection. Each xclip invocation with -loops 0 sets the target
-	// and then exits, which transfers selection ownership to the next
-	// xclip call. By keeping the last xclip alive with -loops we
-	// guarantee the receiving app sees all three targets when it
-	// converts the selection.
-	//
-	// If a previous Set is still holding the clipboard, kill it first
-	// so the new xclip can take ownership cleanly.
-	if prev := prevXclipPID(); prev > 0 {
+	if prev := prevHelperPID(); prev > 0 {
 		_ = syscall.Kill(prev, syscall.SIGTERM)
+		setPrevHelperPID(0)
 	}
-	targets := []string{
-		"x-special/gnome-copied-files",
-		"text/uri-list",
-		"text/plain",
+	// Remove any stale ok file from a previous run.
+	_ = os.Remove("/tmp/x11_fileclip_helper.ok")
+	// Launch helper fully detached so it survives our process exit
+	// (we are the parent of xclip-equivalent, and once the user logs
+	// out / we get killed, the helper must keep holding the X11
+	// selection). setsid puts it in a new session; stdin/stdout/stderr
+	// closed so nothing in the parent can reach it; pid written to
+	// /tmp/x11_fileclip_helper.pid by a tiny shim so we can track it.
+	args := []string{"setsid", "python3", "/tmp/x11_fileclip_helper.py"}
+	args = append(args, paths...)
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start helper: %w", err)
 	}
-	for i, t := range targets {
-		loops := "0"
-		if i == len(targets)-1 {
-			// Final target: stay alive to hold the selection
-			loops = "100"
-		}
-		// All three targets (x-special/gnome-copied-files,
-		// text/uri-list, text/plain) carry the bare absolute path
-		// (no file:// prefix) per user direction.
-		payload := plain
-		cmd := exec.Command("xclip", "-selection", "clipboard", "-loops", loops, "-t", t)
-		cmd.Stdin = strings.NewReader(payload)
-		var err error
-		if i == len(targets)-1 {
-			err = cmd.Start()
-			if err == nil {
-				setPrevXclipPID(cmd.Process.Pid)
-				go func() { _ = cmd.Wait() }()
+	// setsid returns immediately after the child forks. Wait for the
+	// helper to write /tmp/x11_fileclip_helper.ok with {"ok": true}.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile("/tmp/x11_fileclip_helper.ok"); err == nil {
+			if bytes.Contains(data, []byte(`"ok": true`)) {
+				// Best-effort: read the helper's own pid from the ok
+				// file. If parsing fails, fall back to the setsid
+				// wrapper pid; either is good enough for the SIGTERM
+				// on the next Set.
+				var ok struct {
+					OK  bool   `json:"ok"`
+					PID int    `json:"pid"`
+				}
+				if json.Unmarshal(data, &ok) == nil && ok.PID > 0 {
+					setPrevHelperPID(ok.PID)
+				} else {
+					setPrevHelperPID(cmd.Process.Pid)
+				}
+				return nil
 			}
-		} else {
-			err = cmd.Run()
+			if bytes.Contains(data, []byte(`"ok": false`)) {
+				return fmt.Errorf("helper reported error: %s", string(data))
+			}
 		}
-		if err != nil {
-			return fmt.Errorf("xclip -t %s: %w", t, err)
-		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	return nil
+	_ = cmd.Process.Kill()
+	return fmt.Errorf("helper did not confirm clipboard within 3s")
 }
 
 // Paste is a no-op on Linux because the XTest / xdotool synthetic
@@ -147,58 +150,50 @@ func (l *linuxFileClipboard) Set(paths []string) error {
 // server refuses to deliver XTest key events to the active window).
 // The clipboard has already been populated with the right MIME
 // targets by Set(), so the user can press Ctrl+V themselves in the
-// focused application. main.go logs a hint when Paste returns nil
-// after Set, telling the user "press Ctrl+V to paste".
+// focused application.
 func (l *linuxFileClipboard) Paste() error {
 	time.Sleep(200 * time.Millisecond)
-	// Best-effort: try xdotool. It works on non-gdm sessions and
-	// when the user has not blocked XTest. On gdm it is silently
-	// dropped, which is fine because the user can press Ctrl+V
-	// manually; main.go's hint log makes that explicit.
+	// Best-effort: try xdotool. Works on non-gdm sessions. On gdm it
+	// is silently dropped, which is fine because the user can press
+	// Ctrl+V manually; main.go's hint log makes that explicit.
 	return exec.Command("xdotool", "key", "--clearmodifiers", "ctrl+v").Run()
 }
-
 
 func (l *linuxFileClipboard) readURIList() ([]string, error) {
 	cmd := exec.Command("xclip", "-selection", "clipboard", "-o", "-t", "text/uri-list")
 	out, err := cmd.Output()
 	if err != nil {
-		// xclip returns exit 1 when the format is not present, which is fine.
 		return nil, err
 	}
 	return parseURIList(string(out)), nil
 }
 
-// --- background xclip PID tracking ------------------------------------
+// --- background helper PID tracking ------------------------------------
 //
-// When Set() is called repeatedly, only the most recent xclip should
-// remain holding the clipboard selection. We track the last xclip
-// process PID in a package-level variable and SIGTERM it on the next
-// Set, so two stale xclip processes don't fight for ownership.
+// Set() spawns one helper per call. The previous helper is SIGTERMed on
+// the next Set so two stale helpers don't fight for selection ownership.
 
 var (
-	xclipMu  sync.Mutex
-	xclipPID int
+	helperMu  sync.Mutex
+	helperPID int
 )
 
-func setPrevXclipPID(pid int) {
-	xclipMu.Lock()
-	xclipPID = pid
-	xclipMu.Unlock()
+func setPrevHelperPID(pid int) {
+	helperMu.Lock()
+	helperPID = pid
+	helperMu.Unlock()
 }
 
-func prevXclipPID() int {
-	xclipMu.Lock()
-	defer xclipMu.Unlock()
-	return xclipPID
+func prevHelperPID() int {
+	helperMu.Lock()
+	defer helperMu.Unlock()
+	return helperPID
 }
 
 // parseURIList accepts `file://` URIs only. Lines that do not start with
 // `file://` are ignored; this prevents the watcher from interpreting
 // arbitrary clipboard text as a file path when the user just copies
-// text or an image. The xclip invocation can return 0 bytes or even the
-// plain text payload if the system clipboard does not have a uri-list,
-// so we must be strict here.
+// text or an image.
 func parseURIList(s string) []string {
 	var out []string
 	for _, line := range strings.Split(s, "\n") {
@@ -213,10 +208,6 @@ func parseURIList(s string) []string {
 		if rest == "" {
 			continue
 		}
-		// Percent-decode the path so UTF-8 names, spaces, and other
-		// reserved characters come through as the user-typed filesystem
-		// path. File managers like Nautilus URL-encode the path before
-		// putting it on the clipboard, so we must decode before stat.
 		if decoded, derr := url.PathUnescape(rest); derr == nil {
 			rest = decoded
 		}
@@ -224,4 +215,3 @@ func parseURIList(s string) []string {
 	}
 	return out
 }
-

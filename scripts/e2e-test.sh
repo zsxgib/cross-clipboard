@@ -19,7 +19,7 @@
 set -uo pipefail
 
 LINUX_BIN=/tmp/cross-clipboard-4002/cross-clipboard
-LINUX_LOG=/tmp/cross-clipboard-4002/linux.log
+LINUX_LOG=/tmp/cross-clipboard-4002/linux-live.log
 LINUX_INCOMING=/home/zsx/.config/cross-clipboard/incoming
 RESULT_JSON=/tmp/cross-clipboard-4002/e2e-result.json
 RESULT_TXT=/tmp/cross-clipboard-4002/e2e-result.txt
@@ -194,7 +194,7 @@ echo "  source: $WIN_SRC md5=$WIN_SRC_MD5"
 LINUX_BEFORE_LINES=$(wc -l < "$LINUX_LOG")
 run_win_ps "Add-Type -AssemblyName System.Windows.Forms; \$col = New-Object System.Collections.Specialized.StringCollection; \$col.Add('$WIN_SRC'.Replace('\\\\','\\')); [System.Windows.Forms.Clipboard]::SetFileDropList(\$col); Write-Host 'SET'" 2>&1 | tail -1
 
-if wait_log_match "$LINUX_LOG" "received file: $(basename $WIN_SRC) " 30; then
+if wait_log_match "$LINUX_LOG" "received file: $(basename $WIN_SRC | sed 's|\\.bin$|.*bin|') .* from 12D3KooW" 60; then
   echo "  Linux received file"
 else
   record "T3_win_to_linux_1KB" "FAIL" "no 'received file' in 30s"
