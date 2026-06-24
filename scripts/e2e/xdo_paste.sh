@@ -11,21 +11,28 @@
 #       默认 = 'test-1782300467-cp'
 #
 # 可调用的环境变量:
-#   WIN_ID  目标窗口 id (默认 60821710, nautilus '2f2d78fa7228ec92', 即同目录复制)
+#   WIN_ID  目标窗口 id (默认 60821710, 同目录复制)
 set -u
 
 DST_BASENAME="${1:-test-1782300467-cp}"
 WIN_ID="${WIN_ID:-60821710}"
 
-# 1) 焦点检查
+# 1) 切焦点 (重试 3 次, GNOME X11 有时切完要点时间)
 echo "=== xdo_paste: focus window $WIN_ID ==="
-/usr/bin/xdotool windowraise "$WIN_ID"
-/usr/bin/xdotool windowactivate "$WIN_ID"
-/usr/bin/xdotool windowfocus "$WIN_ID"
-/bin/sleep 0.5
-FOC=$(/usr/bin/xdotool getwindowfocus 2>/dev/null || echo none)
+FOC=""
+for i in 1 2 3; do
+  /usr/bin/xdotool windowraise "$WIN_ID" 2>/dev/null
+  /usr/bin/xdotool windowactivate "$WIN_ID" 2>/dev/null
+  /usr/bin/xdotool windowfocus "$WIN_ID" 2>/dev/null
+  /bin/sleep 0.3
+  FOC=$(/usr/bin/xdotool getwindowfocus 2>/dev/null || echo none)
+  if [ "$FOC" = "$WIN_ID" ]; then
+    break
+  fi
+  echo "  retry $i: focused=$FOC want=$WIN_ID"
+done
 if [ "$FOC" != "$WIN_ID" ]; then
-  echo "FAIL  focus not on $WIN_ID (got $FOC)"
+  echo "FAIL  focus not on $WIN_ID (got $FOC after 3 retries)"
   exit 1
 fi
 echo "  focus OK: $FOC"
@@ -44,7 +51,7 @@ echo "=== xdo_paste: Ctrl+V ==="
 /usr/bin/xdotool key --clearmodifiers ctrl+v
 /bin/sleep 0.6
 
-# 4) 选 Keep Both (Nautilus 默认 Replace 按钮, 按一次 Right 到 Keep Both)
+# 4) 选 Keep Both (Nautilus 默认焦点在 Replace 按钮)
 echo "=== xdo_paste: dialog -> Keep Both ==="
 /usr/bin/xdotool key --clearmodifiers Right
 /bin/sleep 0.2
