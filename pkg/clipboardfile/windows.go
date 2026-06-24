@@ -60,6 +60,7 @@ func (w *windowsFileClipboard) Watch(ctx context.Context) <-chan []string {
 					log.Printf("runtime error: readFileDropListDirectNative: %v", err)
 					continue
 				}
+				log.Printf("watcher tick: seq=%d CF_HDROP=%d", seq, len(paths))
 				// Skip work if clipboard sequence number is unchanged
 				// AND the last emitted set equals the current set.
 				if seq == lastSeq && samePathSet(last, paths) {
@@ -69,6 +70,7 @@ func (w *windowsFileClipboard) Watch(ctx context.Context) <-chan []string {
 				if samePathSet(last, paths) {
 					continue
 				}
+				log.Printf("watcher emit: %d paths %v", len(paths), paths)
 				last = paths
 				select {
 				case <-ctx.Done():
