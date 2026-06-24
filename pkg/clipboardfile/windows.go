@@ -47,6 +47,7 @@ func (w *windowsFileClipboard) Watch(ctx context.Context) <-chan []string {
 		defer close(out)
 		var last []string
 		var lastSeq uint32
+		log.Printf("file watcher started: polling OS clipboard every %v (CF_HDROP via user32)", PollingInterval)
 		t := time.NewTicker(PollingInterval)
 		defer t.Stop()
 		for {

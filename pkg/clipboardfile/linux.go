@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"log"
 	"strings"
 	"sync"
 	"syscall"
@@ -53,6 +54,7 @@ func (l *linuxFileClipboard) Watch(ctx context.Context) <-chan []string {
 	go func() {
 		defer close(out)
 		var last []string
+		log.Printf("file watcher started: polling xclip every %v (text/uri-list + gnome-copied-files)", PollingInterval)
 		t := time.NewTicker(PollingInterval)
 		defer t.Stop()
 		for {

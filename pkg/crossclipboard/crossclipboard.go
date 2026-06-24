@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/libp2p/go-libp2p"
@@ -44,6 +45,13 @@ type CrossClipboard struct {
 	// PowerShell available.
 	fileWatcher clipboardfile.FileClipboard
 
+	// recentSelfSet dedups the Set->watcher echo loop. When we put a file
+	// on the OS clipboard (via handleFileReceived), our own watcher will
+	// see that same path on the next poll and try to dispatch it back to
+	// the peer, starting a loop. Entries here expire after 5s.
+	recentSelfSet map[string]time.Time
+	selfSetMu     sync.Mutex
+
 	LogChan   chan string
 	ErrorChan chan error
 
@@ -57,6 +65,7 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 		LogChan:       make(chan string),
 		ErrorChan:     make(chan error),
 		stopDiscovery: make(chan struct{}),
+		recentSelfSet: make(map[string]time.Time),
 	}
 
 	cc.ClipboardManager = clipboard.NewClipboardManager(cc.Config)
@@ -233,12 +242,46 @@ func (cc *CrossClipboard) Stop() error {
 // clipboard + Ctrl+V step.
 func (cc *CrossClipboard) handleFileReceived(path string, meta *filetransfer.FileMeta) {
 	cc.LogChan <- fmt.Sprintf("file received: %s (%d bytes) at %s", meta.Name, meta.Size, path)
+	// Record that we are about to put this path on the OS clipboard so
+	// the watcher (which polls every 500ms) does not see our own Set
+	// and echo the path back to the peer.
+	cc.selfSetMu.Lock()
+	cc.recentSelfSet[path] = time.Now()
+	cc.selfSetMu.Unlock()
+	cc.LogChan <- fmt.Sprintf("self-set guard: marked %s (5s)", path)
 	// OS clipboard + paste wiring lives in pkg/clipboardfile. The wire
 	// integration is intentionally a thin adapter so the package stays
 	// importable from tests without bringing in OS subprocess calls.
 	if cc.fileReceivedHook != nil {
 		cc.fileReceivedHook(path, meta)
 	}
+}
+
+// filterSelfSet strips paths we just put on the OS clipboard from a
+// watcher emission. Anything in recentSelfSet newer than 5 seconds is
+// dropped to prevent the Set->watcher echo loop.
+func (cc *CrossClipboard) filterSelfSet(paths []string) []string {
+	cc.selfSetMu.Lock()
+	defer cc.selfSetMu.Unlock()
+	now := time.Now()
+	// Lazy GC of expired entries so the map does not grow unbounded.
+	for k, t := range cc.recentSelfSet {
+		if now.Sub(t) > 5*time.Second {
+			delete(cc.recentSelfSet, k)
+		}
+	}
+	if len(cc.recentSelfSet) == 0 {
+		return paths
+	}
+	out := paths[:0]
+	for _, p := range paths {
+		if t, hit := cc.recentSelfSet[p]; hit && now.Sub(t) <= 5*time.Second {
+			cc.LogChan <- fmt.Sprintf("self-set guard: dropping echo %s (age %v)", p, now.Sub(t))
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // SetFileReceivedHook installs a callback that runs after a remote file has
@@ -276,6 +319,12 @@ func (cc *CrossClipboard) runFileWatcher() {
 	defer cancel()
 	ch := cc.fileWatcher.Watch(ctx)
 	for paths := range ch {
+		// Drop paths we just put on the OS clipboard ourselves; they are
+		// not a user action and would cause a peer echo loop.
+		paths = cc.filterSelfSet(paths)
+		if len(paths) == 0 {
+			continue
+		}
 		if len(paths) > 0 {
 			cc.ClipboardManager.SetFileClipboardActive(true)
 			go func() {
