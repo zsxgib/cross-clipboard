@@ -50,8 +50,11 @@ func main() {
 		path := strings.ReplaceAll(*setFile, "\\\\", "\\")
 		log.Printf("set-file: normalized path=%q", path)
 		go func() {
+			log.Printf("set-file: goroutine started, will sleep 2s then Set %q", path)
 			time.Sleep(2 * time.Second)
+			log.Printf("set-file: sleep done, calling New()")
 			fc := clipboardfile.New()
+			log.Printf("set-file: New() returned, Available=%v", fc.Available())
 			if !fc.Available() {
 				log.Printf("set-file: OS file clipboard unavailable")
 				return
