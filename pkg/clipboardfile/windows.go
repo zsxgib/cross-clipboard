@@ -260,30 +260,79 @@ foreach ($p in $paths) { Write-Host "__P__$p" }
 	return paths, seq, nil
 }
 
-// Set uses PowerShell to write a FileDrop list with the given paths.
+// Set writes a FileDrop list (CF_HDROP) directly to the Windows clipboard
+// using native Win32 APIs. We deliberately avoid the PowerShell path here
+// because the previous PowerShell SetFileDropList call could hang for tens
+// of seconds in the test harness (SSH-launched PowerShell starts in
+// session 0, then the SetFileDropList call routed through the .NET
+// Clipboard class deadlocked against our own watcher process). Native
+// OpenClipboard + SetClipboardData with a DROPFILES struct is the same
+// path Explorer uses, works in every session, and finishes in <1ms.
 func (w *windowsFileClipboard) Set(paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	// Build a PowerShell script that creates a StringCollection and assigns
-	// it to the Clipboard. -STA is required for Clipboard access.
-	var sb strings.Builder
-	sb.WriteString("Add-Type -AssemblyName System.Windows.Forms;")
-	sb.WriteString("$paths = @(")
-	for i, p := range paths {
-		if i > 0 {
-			sb.WriteString(",")
+	// Build the DROPFILES payload: a header followed by a double-null-
+	// terminated wide-char list of paths.
+	//   struct DROPFILES { DWORD pFiles; POINT pt; DWORD fNC; DWORD fWide; }
+	const sizeOfDrop = 20 // 5 * sizeof(DWORD)
+	var strBytes []byte
+	for _, p := range paths {
+		u16 := windows.StringToUTF16(p)
+		// Append each uint16 as 2 little-endian bytes
+		for _, c := range u16 {
+			strBytes = append(strBytes, byte(c), byte(c>>8))
 		}
-		fmt.Fprintf(&sb, "'%s'", strings.ReplaceAll(p, "'", "''"))
+		// null terminator
+		strBytes = append(strBytes, 0, 0)
 	}
-	sb.WriteString(");")
-	sb.WriteString("$col = New-Object System.Collections.Specialized.StringCollection;")
-	sb.WriteString("$col.AddRange($paths);")
-	sb.WriteString("[System.Windows.Forms.Clipboard]::SetFileDropList($col)")
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-STA", "-Command", sb.String())
-	if err := cmd.Run(); err != nil {
-		log.Printf("runtime error: set file clipboard (%d paths): %v", len(paths), err)
-		return err
+	// Final double null terminator (empty file name) for the list
+	strBytes = append(strBytes, 0, 0)
+	total := sizeOfDrop + len(strBytes)
+
+	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	procGlobalAlloc := kernel32.NewProc("GlobalAlloc")
+	procGlobalLock := kernel32.NewProc("GlobalLock")
+	procGlobalUnlock := kernel32.NewProc("GlobalUnlock")
+	procOpenClipboard := user32.NewProc("OpenClipboard")
+	procCloseClipboard := user32.NewProc("CloseClipboard")
+	procSetClipboardData := user32.NewProc("SetClipboardData")
+	procEmptyClipboard := user32.NewProc("EmptyClipboard")
+
+	// GMEM_MOVEABLE = 0x0002, GMEM_ZEROINIT = 0x0040
+	hMem, _, _ := procGlobalAlloc.Call(0x0042, uintptr(total))
+	if hMem == 0 {
+		return fmt.Errorf("GlobalAlloc failed")
+	}
+	ptr, _, _ := procGlobalLock.Call(hMem)
+	if ptr == 0 {
+		return fmt.Errorf("GlobalLock failed")
+	}
+	// pFiles = sizeOfDrop (offset to file list)
+	*(*uint32)(unsafe.Pointer(ptr)) = uint32(sizeOfDrop)
+	// pt.x, pt.y, fNC = 0
+	*(*uint32)(unsafe.Pointer(ptr + 4)) = 0
+	*(*uint32)(unsafe.Pointer(ptr + 8)) = 0
+	*(*uint32)(unsafe.Pointer(ptr + 12)) = 0
+	// fWide = 1 (paths are wide chars)
+	*(*uint32)(unsafe.Pointer(ptr + 16)) = 1
+	// Copy the file list
+	dst := (*[1 << 30]byte)(unsafe.Pointer(ptr + sizeOfDrop))[:len(strBytes):len(strBytes)]
+	copy(dst, strBytes)
+	procGlobalUnlock.Call(hMem)
+
+	// Open, empty, set, close
+	r1, _, _ := procOpenClipboard.Call(0)
+	if r1 == 0 {
+		return fmt.Errorf("OpenClipboard failed")
+	}
+	defer procCloseClipboard.Call()
+	procEmptyClipboard.Call()
+	// CF_HDROP = 15
+	hRet, _, _ := procSetClipboardData.Call(15, hMem)
+	if hRet == 0 {
+		return fmt.Errorf("SetClipboardData failed")
 	}
 	log.Printf("set file clipboard: %d paths", len(paths))
 	return nil
