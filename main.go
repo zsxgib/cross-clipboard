@@ -18,6 +18,10 @@ import (
 	"github.com/ntsd/cross-clipboard/pkg/clipboardfile"
 	"github.com/ntsd/cross-clipboard/pkg/filetransfer"
 	"github.com/ntsd/cross-clipboard/pkg/xerror"
+
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
+	"golang.org/x/net/context"
 )
 
 func main() {
@@ -32,6 +36,7 @@ func main() {
 	isTerminalMode := flag.Bool("t", false, "run in terminal mode")
 	setFile := flag.String("set-file", "", "test helper: put this absolute file path on the OS clipboard as CF_HDROP after startup, then continue running. Used by the e2e test to simulate a user copying a file when SSH cannot reach the interactive Windows session.")
 	triggerFile := flag.String("trigger-file", "", "test helper: poll this file every 500ms; when its content is a path, put it on the OS clipboard as CF_HDROP, then truncate the file. Lets an e2e test trigger a copy on a long-running daemon via a write-only side channel.")
+	peerMultiaddr := flag.String("peer-multiaddr", "", "optional: connect to this libp2p multiaddr on startup with exponential backoff. Useful when mDNS discovery is not available.")
 	flag.Parse()
 
 	// Optional: tee all log output to a file. Used by the e2e test to
@@ -60,6 +65,10 @@ func main() {
 	crossClipboard, err := crossclipboard.NewCrossClipboard(cfg)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if *peerMultiaddr != "" {
+		go dialPeerMultiaddr(*peerMultiaddr, crossClipboard)
 	}
 
 	// File clipboard bridge: when a remote file arrives, put it on the OS
@@ -208,5 +217,39 @@ func runTriggerWatcher(triggerPath string, logChan chan string) {
 			continue
 		}
 		logChan <- fmt.Sprintf("trigger: put %s on OS clipboard", p)
+	}
+}
+
+// dialPeerMultiaddr parses addr and repeatedly calls host.Connect with
+// exponential backoff. It runs in its own goroutine; main() never blocks
+// on it. mDNS may not work in all environments (different LANs, NAT,
+// multicast blocked on Wi-Fi), and cross-clipboard has no built-in
+// bootstrapping. The CLI flag lets an e2e test pass the known peer
+// multiaddr at launch.
+func dialPeerMultiaddr(addr string, cc *crossclipboard.CrossClipboard) {
+	ma, err := multiaddr.NewMultiaddr(addr)
+	if err != nil {
+		log.Printf("peer-multiaddr: parse %q failed: %v", addr, err)
+		return
+	}
+	info, err := peer.AddrInfoFromP2pAddr(ma)
+	if err != nil {
+		log.Printf("peer-multiaddr: addrInfo from %q failed: %v", addr, err)
+		return
+	}
+	backoff := time.Second
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := cc.Host.Connect(ctx, *info)
+		cancel()
+		if err == nil {
+			log.Printf("peer-multiaddr: connected to %s", info.ID)
+			return
+		}
+		log.Printf("peer-multiaddr: connect to %s failed: %v (retry in %v)", info.ID, err, backoff)
+		time.Sleep(backoff)
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
 	}
 }
