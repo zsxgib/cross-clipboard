@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -19,7 +20,11 @@ import (
 // windowsFileClipboard implements FileClipboard using PowerShell against
 // System.Windows.Forms.Clipboard. Set writes a FileDrop list; Paste uses
 // SendInput via Add-Type.
-type windowsFileClipboard struct{}
+type windowsFileClipboard struct {
+	mu          sync.Mutex
+	selfSetAt   time.Time
+	selfSetPath string
+}
 
 // New returns a FileClipboard for the current OS.
 func New() FileClipboard {
@@ -58,6 +63,21 @@ func (w *windowsFileClipboard) Watch(ctx context.Context) <-chan []string {
 				if err != nil {
 					log.Printf("runtime error: readFileDropListDirectNative: %v", err)
 					continue
+				}
+				// Suppress self-write loop: if we just Set this same path within
+				// the last 2 seconds, the Watcher is just seeing our own write,
+				// not a user-initiated copy. Skip it so we do not echo the file
+				// back to the peer that just sent it.
+				w.mu.Lock()
+				selfPath := w.selfSetPath
+				selfAt := w.selfSetAt
+				w.mu.Unlock()
+				if selfPath != "" && time.Since(selfAt) < 2*time.Second {
+					if len(paths) == 1 && paths[0] == selfPath {
+						lastSeq = seq
+						last = paths
+						continue
+					}
 				}
 				// Skip work if clipboard sequence number is unchanged
 				// AND the last emitted set equals the current set.
@@ -269,6 +289,15 @@ func (w *windowsFileClipboard) Set(paths []string) error {
 	if err := cmd.Run(); err != nil {
 		log.Printf("runtime error: set file clipboard (%d paths): %v", len(paths), err)
 		return err
+	}
+	// Record what we just wrote so the Watcher can ignore its own
+	// reflection for the next 2 seconds and avoid echoing the file
+	// back to the peer that just sent it.
+	if len(paths) == 1 {
+		w.mu.Lock()
+		w.selfSetPath = paths[0]
+		w.selfSetAt = time.Now()
+		w.mu.Unlock()
 	}
 	log.Printf("set file clipboard: %d paths", len(paths))
 	return nil
