@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -103,8 +104,13 @@ func (l *linuxFileClipboard) Set(paths []string) error {
 	return nil
 }
 
-// Paste simulates Ctrl+V with xdotool.
+// Paste simulates Ctrl+V with xdotool. A small delay between the
+// preceding Set() and the keystroke gives the X11 clipboard manager
+// (xclip, xfce4-clipman, etc.) time to commit the new selection so the
+// receiving app reads the just-copied file URIs, not the previous
+// clipboard contents.
 func (l *linuxFileClipboard) Paste() error {
+	time.Sleep(200 * time.Millisecond)
 	return exec.Command("xdotool", "key", "--clearmodifiers", "ctrl+v").Run()
 }
 
@@ -137,6 +143,13 @@ func parseURIList(s string) []string {
 		}
 		if rest == "" {
 			continue
+		}
+		// Percent-decode the path so UTF-8 names, spaces, and other
+		// reserved characters come through as the user-typed filesystem
+		// path. File managers like Nautilus URL-encode the path before
+		// putting it on the clipboard, so we must decode before stat.
+		if decoded, derr := url.PathUnescape(rest); derr == nil {
+			rest = decoded
 		}
 		out = append(out, rest)
 	}

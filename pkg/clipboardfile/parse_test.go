@@ -20,6 +20,9 @@ func TestParseURIList(t *testing.T) {
 		{"rejects bare paths", "/etc/hostname\nfile:///a\n", []string{"/a"}},
 		{"rejects http", "http://example.com/x\nfile:///a\n", []string{"/a"}},
 		{"rejects text content", "hello world\nfile:///a\n", []string{"/a"}},
+		{"decodes percent-encoded utf-8", "file:///home/x/%E4%B8%8B%E8%BD%BD/a.txt\n", []string{"/home/x/下载/a.txt"}},
+		{"decodes percent-encoded space", "file:///home/x/My%20Files/a.txt\n", []string{"/home/x/My Files/a.txt"}},
+		{"ignores bad percent encoding", "file:///home/x/%ZZ/bad\n", []string{"/home/x/%ZZ/bad"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

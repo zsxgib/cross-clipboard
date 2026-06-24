@@ -274,11 +274,17 @@ func (w *windowsFileClipboard) Set(paths []string) error {
 	return nil
 }
 
-// Paste simulates Ctrl+V via SendInput.
+// Paste simulates Ctrl+V by sending the keystroke to the current
+// foreground window. We deliberately do NOT call AppActivate: the
+// previous implementation activated the PowerShell host's own
+// main-window handle, which stole focus from the user's actual
+// application and made Ctrl+V land in PowerShell instead of the
+// recipient (chat client, Explorer, Office, ...). WScript.Shell.SendKeys
+// already targets whatever window currently has focus, so the only
+// thing left to do is wait briefly for the OS clipboard write to settle
+// before the recipient app asks for it.
 func (w *windowsFileClipboard) Paste() error {
-	// Use SendWait so the keystroke is delivered to the focused window
-	// synchronously, then clear modifiers.
-	ps := `$ws = New-Object -ComObject WScript.Shell; $ws.AppActivate((Get-Process -Id $PID).MainWindowHandle) | Out-Null; $ws.SendKeys('^v')`
+	ps := `(Get-Process -Id $PID) | Out-Null; Start-Sleep -Milliseconds 200; (New-Object -ComObject WScript.Shell).SendKeys('^v')`
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-Command", ps)
 	return cmd.Run()
 }
