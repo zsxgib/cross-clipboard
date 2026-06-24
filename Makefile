@@ -1,8 +1,6 @@
 run:
 	go run ./main.go
 
-run-terminal:
-	go run ./main.go -t
 
 build:
 	go build .

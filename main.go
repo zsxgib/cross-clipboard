@@ -18,7 +18,6 @@ import (
 	"github.com/ntsd/cross-clipboard/pkg/clipboardfile"
 	"github.com/ntsd/cross-clipboard/pkg/filetransfer"
 	"github.com/ntsd/cross-clipboard/pkg/xerror"
-	"github.com/ntsd/cross-clipboard/ui"
 )
 
 func main() {
@@ -100,58 +99,54 @@ func main() {
 		}
 	}
 
-	if isTerminalMode != nil && *isTerminalMode {
-		exitSignal := make(chan os.Signal, 1)
-		signal.Notify(exitSignal, os.Interrupt)
+	_ = isTerminalMode // -t flag is accepted; default and -t both run log mode
+	exitSignal := make(chan os.Signal, 1)
+	signal.Notify(exitSignal, os.Interrupt)
 
-		for {
-			select {
-			case l := <-crossClipboard.LogChan:
-				log.Println("log: ", l)
-			case err := <-crossClipboard.ErrorChan:
-				var fatalErr *xerror.FatalError
-				if errors.As(err, &fatalErr) {
-					// Fatal errors are reported but the daemon keeps
-					// running so the e2e test harness can inspect
-					// state and the user can restart the connection.
-					log.Printf("fatal error (keeping process alive): %v", fatalErr)
-					continue
-				}
-				log.Println(fmt.Errorf("runtime error: %w", err))
-			case <-crossClipboard.ClipboardManager.ClipboardsHistoryUpdated:
-				// log.Printf("clipboard history updated, history size %d", len(crossClipboard.ClipboardManager.ClipboardsHistory))
-			case <-crossClipboard.DeviceManager.DevicesUpdated:
-				for _, dv := range crossClipboard.DeviceManager.Devices {
-					if dv.Status == device.StatusPending {
-						fmt.Printf("device %s wanted to connect (Y/n)", dv.Name)
-						var input string
-						fmt.Scanln(&input)
-						if input == "n" {
-							dv.Block()
-						} else {
-							err = dv.Trust()
-							if err != nil {
-								log.Println(fmt.Errorf("can not trust device: %w", err))
-							}
-						}
-						crossClipboard.DeviceManager.UpdateDevice(dv)
-					}
-				}
-			case exit := <-exitSignal:
-				log.Printf("got %s signal. aborting...\n", exit)
-				err := crossClipboard.Stop()
-				if err != nil {
-					log.Panicln(fmt.Errorf("error to graceful eixt: %w", err))
-				}
-				log.Printf("got %s signal. cleanup + keep alive for diagnostics", exit)
-				_ = crossClipboard.Stop()
-				log.Printf("stop() returned, blocking")
-				select {}
+	for {
+		select {
+		case l := <-crossClipboard.LogChan:
+			log.Println("log: ", l)
+		case err := <-crossClipboard.ErrorChan:
+			var fatalErr *xerror.FatalError
+			if errors.As(err, &fatalErr) {
+				// Fatal errors are reported but the daemon keeps
+				// running so the e2e test harness can inspect
+				// state and the user can restart the connection.
+				log.Printf("fatal error (keeping process alive): %v", fatalErr)
+				continue
 			}
+			log.Println(fmt.Errorf("runtime error: %w", err))
+		case <-crossClipboard.ClipboardManager.ClipboardsHistoryUpdated:
+			// log.Printf("clipboard history updated, history size %d", len(crossClipboard.ClipboardManager.ClipboardsHistory))
+		case <-crossClipboard.DeviceManager.DevicesUpdated:
+			for _, dv := range crossClipboard.DeviceManager.Devices {
+				if dv.Status == device.StatusPending {
+					fmt.Printf("device %s wanted to connect (Y/n)", dv.Name)
+					var input string
+					fmt.Scanln(&input)
+					if input == "n" {
+						dv.Block()
+					} else {
+						err = dv.Trust()
+						if err != nil {
+							log.Println(fmt.Errorf("can not trust device: %w", err))
+						}
+					}
+					crossClipboard.DeviceManager.UpdateDevice(dv)
+				}
+			}
+		case exit := <-exitSignal:
+			log.Printf("got %s signal. aborting...\n", exit)
+			err := crossClipboard.Stop()
+			if err != nil {
+				log.Panicln(fmt.Errorf("error to graceful eixt: %w", err))
+			}
+			log.Printf("got %s signal. cleanup + keep alive for diagnostics", exit)
+			_ = crossClipboard.Stop()
+			log.Printf("stop() returned, blocking")
+			select {}
 		}
-	} else {
-		view := ui.NewView(crossClipboard)
-		view.Start()
 	}
 }
 
