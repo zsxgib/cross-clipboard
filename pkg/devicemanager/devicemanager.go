@@ -37,8 +37,23 @@ func (dm *DeviceManager) GetDevice(id string) *device.Device {
 	return dm.Devices[id]
 }
 
-func (dm *DeviceManager) UpdateDevice(device *device.Device) {
-	dm.Devices[device.AddressInfo.ID.String()] = device
+func (dm *DeviceManager) UpdateDevice(dv *device.Device) {
+	dm.Devices[dv.AddressInfo.ID.String()] = dv
+
+	// Clean up stale entries: when a device reconnects with a new identity
+	// (different peer ID), remove old disconnected entries for the same
+	// physical machine (matched by name + OS).
+	if dv.Status == device.StatusConnected && dv.Name != "" {
+		for id, other := range dm.Devices {
+			if id != dv.AddressInfo.ID.String() &&
+				other.Name == dv.Name &&
+				other.OS == dv.OS &&
+				other.Status == device.StatusDisconnected {
+				delete(dm.Devices, id)
+			}
+		}
+	}
+
 	dm.DevicesUpdated <- struct{}{}
 	dm.Save()
 }
