@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
@@ -56,8 +55,8 @@ type CrossClipboard struct {
 func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 	cc := &CrossClipboard{
 		Config:        cfg,
-		LogChan:       make(chan string),
-		ErrorChan:     make(chan error),
+		LogChan:       make(chan string, 100),
+		ErrorChan:     make(chan error, 100),
 		stopDiscovery: make(chan struct{}),
 		recentSelfSet: make(map[string]time.Time),
 	}
@@ -146,29 +145,20 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 
 			cc.LogChan <- fmt.Sprintf("connecting to peer: %s", peerInfo.ID)
 
-				retry := 1
-				for ; retry < 5; retry++ {
-					if err := cc.Host.Connect(ctx, peerInfo); err != nil {
-						cc.ErrorChan <- xerror.NewRuntimeErrorf(
-							"error to connect to peer %s, retrying %d",
-							peerInfo.ID,
-							retry,
-				).Wrap(err)
-				jitter := time.Duration(rand.Intn(5)) * time.Second
-				time.Sleep(time.Duration(retry*10)*time.Second + jitter)
-				continue
-					}
-					break
-				}
-				if retry == 5 {
-				cc.ErrorChan <- xerror.NewRuntimeErrorf("error to connect to peer %s", peerInfo.ID)
+			// Dial once per discovery event; mDNS re-broadcasts every few
+			// seconds, so transient TLS simultaneous-connect errors recover
+			// naturally and quickly (like the original cross-clipboard).
+			if err := cc.Host.Connect(ctx, peerInfo); err != nil {
+				cc.ErrorChan <- xerror.NewRuntimeErrorf("error to connect to peer %s", peerInfo.ID).Wrap(err)
 				continue
 			}
 
-			// If the peer connected to us during the retry wait, skip
-			// opening a new stream to avoid clobbering the active one.
+			// If the peer already connected to us via an incoming stream,
+			// skip opening a redundant outgoing stream. Check for an active
+			// stream instead of status==connected, because a freshly added
+			// device has an empty status until the handshake completes.
 			dv = cc.DeviceManager.GetDevice(peerInfo.ID.String())
-			if dv != nil && dv.Status == device.StatusConnected {
+			if dv != nil && dv.Stream != nil {
 				cc.LogChan <- fmt.Sprintf("already connected to peer: %s, skipping new stream", peerInfo.ID)
 				continue
 			}
