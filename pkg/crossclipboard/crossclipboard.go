@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
@@ -127,11 +128,18 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 			case peerInfo := <-peerInfoChan:
 				dv := cc.DeviceManager.GetDevice(peerInfo.ID.String())
 				if dv != nil && dv.Status == device.StatusBlocked {
-					cc.ErrorChan <- xerror.NewRuntimeErrorf("device %s is blocked", peerInfo.ID)
-					continue
-				}
+				cc.ErrorChan <- xerror.NewRuntimeErrorf("device %s is blocked", peerInfo.ID)
+				continue
+			}
 
-				cc.LogChan <- fmt.Sprintf("connecting to peer: %s", peerInfo.ID)
+			// Avoid TLS simultaneous-connect: the peer with the lower
+			// peer ID dials first; the other waits briefly.
+			if cc.Host.ID().String() > peerInfo.ID.String() {
+				cc.LogChan <- fmt.Sprintf("waiting 3s before dialing %s (lower peer ID dials first)", peerInfo.ID)
+				time.Sleep(3 * time.Second)
+			}
+
+			cc.LogChan <- fmt.Sprintf("connecting to peer: %s", peerInfo.ID)
 
 				retry := 1
 				for ; retry < 5; retry++ {
@@ -140,9 +148,10 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 							"error to connect to peer %s, retrying %d",
 							peerInfo.ID,
 							retry,
-						).Wrap(err)
-						time.Sleep(time.Duration(retry*10) * time.Second)
-						continue
+				).Wrap(err)
+				jitter := time.Duration(rand.Intn(5)) * time.Second
+				time.Sleep(time.Duration(retry*10)*time.Second + jitter)
+				continue
 					}
 					break
 				}
