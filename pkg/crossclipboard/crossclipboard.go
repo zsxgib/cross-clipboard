@@ -132,6 +132,11 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 				continue
 			}
 
+			// Skip if already connected (peer may have connected to us).
+			if dv != nil && dv.Status == device.StatusConnected {
+				continue
+			}
+
 			// Avoid TLS simultaneous-connect: the peer with the lower
 			// peer ID dials first; the other waits briefly.
 			if cc.Host.ID().String() > peerInfo.ID.String() {
@@ -156,11 +161,19 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 					break
 				}
 				if retry == 5 {
-					cc.ErrorChan <- xerror.NewRuntimeErrorf("error to connect to peer %s", peerInfo.ID)
-					continue
-				}
+				cc.ErrorChan <- xerror.NewRuntimeErrorf("error to connect to peer %s", peerInfo.ID)
+				continue
+			}
 
-				stream, err := cc.Host.NewStream(ctx, peerInfo.ID, stream.PROTOCAL_ID)
+			// If the peer connected to us during the retry wait, skip
+			// opening a new stream to avoid clobbering the active one.
+			dv = cc.DeviceManager.GetDevice(peerInfo.ID.String())
+			if dv != nil && dv.Status == device.StatusConnected {
+				cc.LogChan <- fmt.Sprintf("already connected to peer: %s, skipping new stream", peerInfo.ID)
+				continue
+			}
+
+			stream, err := cc.Host.NewStream(ctx, peerInfo.ID, stream.PROTOCAL_ID)
 				if err != nil {
 					cc.ErrorChan <- xerror.NewRuntimeError("new stream error").Wrap(err)
 					continue
