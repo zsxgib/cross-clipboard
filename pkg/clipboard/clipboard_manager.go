@@ -3,6 +3,7 @@ package clipboard
 import (
 	"bytes"
 	"context"
+	"strings"
 
 	"github.com/ntsd/cross-clipboard/pkg/config"
 	"github.com/ntsd/cross-clipboard/pkg/device"
@@ -88,4 +89,24 @@ func (c *ClipboardManager) IsReceivedClipboard(clipboardData []byte) bool {
 	}
 
 	return bytes.Equal(clipboardData, c.receivedClipboard.Data)
+}
+
+// IsFileURIList reports whether the clipboard text is a file:// URI list,
+// indicating a file-copy operation that is handled by the file clipboard
+// watcher rather than the text sync path.
+func (c *ClipboardManager) IsFileURIList(data []byte) bool {
+	text := strings.TrimSpace(string(data))
+	if text == "" {
+		return false
+	}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "file://") {
+			return true
+		}
+	}
+	return false
 }
