@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -29,6 +30,9 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// start OS file-clipboard sync (copy file on one device -> paste on another)
+	crossClipboard.StartFileClipboard(context.Background())
+
 	if isTerminalMode != nil && *isTerminalMode {
 		exitSignal := make(chan os.Signal, 1)
 		signal.Notify(exitSignal, os.Interrupt)
@@ -44,7 +48,6 @@ func main() {
 				}
 				log.Println(fmt.Errorf("runtime error: %w", err))
 			case <-crossClipboard.ClipboardManager.ClipboardsHistoryUpdated:
-				// log.Printf("clipboard history updated, history size %d", len(crossClipboard.ClipboardManager.ClipboardsHistory))
 			case <-crossClipboard.DeviceManager.DevicesUpdated:
 				for _, dv := range crossClipboard.DeviceManager.Devices {
 					if dv.Status == device.StatusPending {

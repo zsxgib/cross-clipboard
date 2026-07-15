@@ -15,3 +15,30 @@ message ClipboardData {
   int64 time = 3;
   bytes data = 4;
 }
+
+// File transfer messages, ported from zero-share (src/proto/message.proto).
+// Wire protocol is identical; only the crypto for the AES key differs:
+// zero-share wraps the AES key with RSA-OAEP; cross-clipboard wraps it with
+// the existing per-device OpenPGP (gopenpgp) encrypter.
+message MetaData {
+  string name = 1;  // base filename
+  int32 size = 2;   // file size in bytes
+  string type = 3;  // MIME type
+  bytes key = 4;    // PGP-encrypted AES key
+}
+
+enum ReceiveEvent {
+  EVENT_RECEIVER_ACCEPT = 0;   // receiver accepted the file
+  EVENT_RECEIVER_REJECT = 1;   // receiver rejected the file
+  EVENT_RECEIVED_CHUNK = 2;    // receiver got a file chunk
+  EVENT_VALIDATE_ERROR = 3;   // receiver got a validation error
+}
+
+message Message {
+  string id = 1;  // file id (correlates the chunk stream)
+  oneof data {
+    MetaData metaData = 2;        // sender -> receiver: file metadata header
+    bytes chunk = 3;               // sender -> receiver: one encrypted file chunk
+    ReceiveEvent receiveEvent = 4; // receiver -> sender: status event
+  }
+}

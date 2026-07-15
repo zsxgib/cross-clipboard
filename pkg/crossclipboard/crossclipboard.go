@@ -5,12 +5,16 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/ntsd/cross-clipboard/pkg/clipboard"
+	"github.com/ntsd/cross-clipboard/pkg/clipboardfile"
 	"github.com/ntsd/cross-clipboard/pkg/config"
 	"github.com/ntsd/cross-clipboard/pkg/crypto"
 	"github.com/ntsd/cross-clipboard/pkg/device"
@@ -30,6 +34,17 @@ type CrossClipboard struct {
 
 	streamHandler *stream.StreamHandler
 
+	// File transfer state.
+	pgpDecrypter   *crypto.PGPDecrypter                // own PGP private key, to unwrap received AES keys
+	fileTempDir    string                              // where received files are written
+	onFileReceived func(path string, meta interface{}) // OS-clipboard paste hook
+
+	// OS file clipboard (copy/paste of files). nil when unavailable.
+	fileClipboard clipboardfile.FileClipboard
+	fileCancel    context.CancelFunc
+	recentSelfSet map[string]time.Time // paths we just put on our own clipboard (anti-echo)
+	selfSetMu     sync.Mutex
+
 	LogChan   chan string
 	ErrorChan chan error
 
@@ -43,20 +58,29 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 		LogChan:       make(chan string),
 		ErrorChan:     make(chan error),
 		stopDiscovery: make(chan struct{}),
+		recentSelfSet: make(map[string]time.Time),
 	}
 
 	cc.ClipboardManager = clipboard.NewClipboardManager(cc.Config)
 	cc.DeviceManager = devicemanager.NewDeviceManager(cc.Config)
 
+	// resolve received-file temp dir
+	fileTempDir := cc.Config.FileTempDir
+	if fileTempDir == "" {
+		fileTempDir = filepath.Join(cc.Config.ConfigDirPath, "incoming")
+	}
+	if err := os.MkdirAll(fileTempDir, 0o755); err != nil {
+		return nil, xerror.NewFatalError("create file temp dir").Wrap(err)
+	}
+	cc.fileTempDir = fileTempDir
+
 	ctx := context.Background()
 
-	// 0.0.0.0 will listen on any interface device.
 	sourceMultiAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%d", cc.Config.ListenHost, cc.Config.ListenPort))
 	if err != nil {
 		return nil, xerror.NewFatalError("error to multiaddr.NewMultiaddr").Wrap(err)
 	}
 
-	// libp2p.New constructs a new libp2p Host.
 	host, err := libp2p.New(
 		libp2p.ListenAddrs(sourceMultiAddr),
 		libp2p.Identity(cc.Config.ID),
@@ -70,6 +94,7 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 	if err != nil {
 		return nil, xerror.NewFatalError("error to crypto.NewPGPDecrypter").Wrap(err)
 	}
+	cc.pgpDecrypter = pgpDecrypter
 
 	go func() {
 		err := cc.DeviceManager.Load()
@@ -87,8 +112,8 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 		)
 		cc.streamHandler = streamHandler
 
-		// This function is called when a peer initiates a connection and starts a stream with this peer.
 		cc.Host.SetStreamHandler(stream.PROTOCAL_ID, streamHandler.HandleStream)
+		cc.Host.SetStreamHandler(stream.FileProtocolID, cc.handleFileStream)
 		cc.LogChan <- fmt.Sprintf("[*] your multiaddress is: /ip4/%s/tcp/%v/p2p/%s", cc.Config.ListenHost, cc.Config.ListenPort, host.ID())
 
 		peerInfoChan, err := discovery.InitMultiMDNS(cc.Host, cc.Config.GroupName, cc.LogChan)
@@ -99,7 +124,7 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 	discoveryLoop:
 		for {
 			select {
-			case peerInfo := <-peerInfoChan: // when discover a peer
+			case peerInfo := <-peerInfoChan:
 				dv := cc.DeviceManager.GetDevice(peerInfo.ID.String())
 				if dv != nil && dv.Status == device.StatusBlocked {
 					cc.ErrorChan <- xerror.NewRuntimeErrorf("device %s is blocked", peerInfo.ID)
@@ -109,7 +134,7 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 				cc.LogChan <- fmt.Sprintf("connecting to peer: %s", peerInfo.ID)
 
 				retry := 1
-				for ; retry < 5; retry++ { // retry to connect
+				for ; retry < 5; retry++ {
 					if err := cc.Host.Connect(ctx, peerInfo); err != nil {
 						cc.ErrorChan <- xerror.NewRuntimeErrorf(
 							"error to connect to peer %s, retrying %d",
@@ -126,7 +151,6 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 					continue
 				}
 
-				// open a stream, this stream will be handled by handleStream other end
 				stream, err := cc.Host.NewStream(ctx, peerInfo.ID, stream.PROTOCAL_ID)
 				if err != nil {
 					cc.ErrorChan <- xerror.NewRuntimeError("new stream error").Wrap(err)
@@ -146,7 +170,7 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 				go streamHandler.CreateReadData(dv.Reader, dv)
 
 				cc.LogChan <- fmt.Sprintf("connected to peer host: %s", peerInfo)
-			case <-cc.stopDiscovery: // when stop discovery
+			case <-cc.stopDiscovery:
 				cc.LogChan <- "stop discovery peer"
 				break discoveryLoop
 			}
@@ -157,6 +181,9 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 }
 
 func (cc *CrossClipboard) Stop() error {
+	if cc.fileCancel != nil {
+		cc.fileCancel()
+	}
 	if cc.streamHandler != nil {
 		for id, dv := range cc.DeviceManager.Devices {
 			if dv.Status == device.StatusConnected {
@@ -165,7 +192,6 @@ func (cc *CrossClipboard) Stop() error {
 			}
 		}
 
-		// sleep to wait sending disconnect signal
 		time.Sleep(time.Second)
 
 		for id, dv := range cc.DeviceManager.Devices {

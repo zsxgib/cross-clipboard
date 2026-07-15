@@ -27,6 +27,14 @@ type Config struct {
 	MaxSize    int `mapstructure:"max_size"`    // limit clipboard size (bytes) to send
 	MaxHistory int `mapstructure:"max_history"` // limit number of clipboard history
 
+	// File Transfer Config (ported from zero-share SendOptions/ReceiveOptions)
+	MaxFileSize    int64  `mapstructure:"max_file_size"`    // limit file size (bytes) to send
+	FileTempDir    string `mapstructure:"file_temp_dir"`    // dir for received files (default: config dir/incoming)
+	AutoPaste      bool   `mapstructure:"auto_paste"`       // simulate paste after receiving a file
+	FileChunkSize  int    `mapstructure:"file_chunk_size"`  // file chunk size in bytes
+	FileAutoAccept bool   `mapstructure:"file_auto_accept"` // auto-accept incoming files
+	FileEncrypt    bool   `mapstructure:"file_encrypt"`     // encrypt file content (AES + PGP-wrapped key)
+
 	// UI Config
 	HiddenText bool `mapstructure:"hidden_text"` // hidden clipboard text in UI
 
@@ -95,6 +103,13 @@ func LoadConfig() (*Config, error) {
 
 	viper.SetDefault("max_size", 5<<20) // 5MB
 	viper.SetDefault("max_history", 10)
+
+	viper.SetDefault("max_file_size", int64(1<<30)) // 1 GiB
+	viper.SetDefault("file_temp_dir", "")           // resolved at runtime to config dir/incoming
+	viper.SetDefault("auto_paste", true)
+	viper.SetDefault("file_chunk_size", 32*1024)
+	viper.SetDefault("file_auto_accept", true)
+	viper.SetDefault("file_encrypt", true)
 
 	viper.SetDefault("hidden_text", true)
 

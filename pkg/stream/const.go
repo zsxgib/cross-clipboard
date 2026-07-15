@@ -10,6 +10,10 @@ type (
 const (
 	PROTOCAL_ID protocol.ID = protocol.ID("/cross-clipboard/0.0.1")
 
+	// FileProtocolID is a dedicated stream protocol for file transfer so file
+	// messages don't interleave with clipboard frames on PROTOCAL_ID.
+	FileProtocolID protocol.ID = protocol.ID("/cross-clipboard/file/0.0.1")
+
 	// data type is the first byte after data size to identify the message type
 	DataTypeDevice    DataType = 0xFF // use for device data
 	DataTypeClipboard DataType = 0xFE // use for clipboard data
