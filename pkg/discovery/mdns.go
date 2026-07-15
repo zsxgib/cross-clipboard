@@ -29,7 +29,7 @@ func InitMultiMDNS(peerhost host.Host, rendezvous string, logchan chan string) (
 	// register with service so that we get notified about peer discovery
 	n := &DiscoveryNotifee{
 		PeerHost: peerhost,
-		PeerChan: make(chan peer.AddrInfo, 16),
+		PeerChan: make(chan peer.AddrInfo),
 		LogChan:  logchan,
 	}
 

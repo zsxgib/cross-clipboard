@@ -55,8 +55,8 @@ type CrossClipboard struct {
 func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 	cc := &CrossClipboard{
 		Config:        cfg,
-		LogChan:       make(chan string, 100),
-		ErrorChan:     make(chan error, 100),
+		LogChan:       make(chan string),
+		ErrorChan:     make(chan error),
 		stopDiscovery: make(chan struct{}),
 		recentSelfSet: make(map[string]time.Time),
 	}
@@ -124,46 +124,35 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 	discoveryLoop:
 		for {
 			select {
-			case peerInfo := <-peerInfoChan:
+			case peerInfo := <-peerInfoChan: // when discover a peer
 				dv := cc.DeviceManager.GetDevice(peerInfo.ID.String())
 				if dv != nil && dv.Status == device.StatusBlocked {
-				cc.ErrorChan <- xerror.NewRuntimeErrorf("device %s is blocked", peerInfo.ID)
-				continue
-			}
+					cc.ErrorChan <- xerror.NewRuntimeErrorf("device %s is blocked", peerInfo.ID)
+					continue
+				}
 
-			// Skip if already connected (peer may have connected to us).
-			if dv != nil && dv.Status == device.StatusConnected {
-				continue
-			}
+				cc.LogChan <- fmt.Sprintf("connecting to peer: %s", peerInfo.ID)
 
-			// Avoid TLS simultaneous-connect: the peer with the lower
-			// peer ID dials first; the other waits briefly.
-			if cc.Host.ID().String() > peerInfo.ID.String() {
-				cc.LogChan <- fmt.Sprintf("waiting 3s before dialing %s (lower peer ID dials first)", peerInfo.ID)
-				time.Sleep(3 * time.Second)
-			}
+				retry := 1
+				for ; retry < 5; retry++ { // retry to connect
+					if err := cc.Host.Connect(ctx, peerInfo); err != nil {
+						cc.ErrorChan <- xerror.NewRuntimeErrorf(
+							"error to connect to peer %s, retrying %d",
+							peerInfo.ID,
+							retry,
+						).Wrap(err)
+						time.Sleep(time.Duration(retry*10) * time.Second)
+						continue
+					}
+					break
+				}
+				if retry == 5 {
+					cc.ErrorChan <- xerror.NewRuntimeErrorf("error to connect to peer %s", peerInfo.ID)
+					continue
+				}
 
-			cc.LogChan <- fmt.Sprintf("connecting to peer: %s", peerInfo.ID)
-
-			// Dial once per discovery event; mDNS re-broadcasts every few
-			// seconds, so transient TLS simultaneous-connect errors recover
-			// naturally and quickly (like the original cross-clipboard).
-			if err := cc.Host.Connect(ctx, peerInfo); err != nil {
-				cc.ErrorChan <- xerror.NewRuntimeErrorf("error to connect to peer %s", peerInfo.ID).Wrap(err)
-				continue
-			}
-
-			// If the peer already connected to us via an incoming stream,
-			// skip opening a redundant outgoing stream. Check for an active
-			// stream instead of status==connected, because a freshly added
-			// device has an empty status until the handshake completes.
-			dv = cc.DeviceManager.GetDevice(peerInfo.ID.String())
-			if dv != nil && dv.Stream != nil {
-				cc.LogChan <- fmt.Sprintf("already connected to peer: %s, skipping new stream", peerInfo.ID)
-				continue
-			}
-
-			stream, err := cc.Host.NewStream(ctx, peerInfo.ID, stream.PROTOCAL_ID)
+				// open a stream, this stream will be handled by handleStream other end
+				stream, err := cc.Host.NewStream(ctx, peerInfo.ID, stream.PROTOCAL_ID)
 				if err != nil {
 					cc.ErrorChan <- xerror.NewRuntimeError("new stream error").Wrap(err)
 					continue
