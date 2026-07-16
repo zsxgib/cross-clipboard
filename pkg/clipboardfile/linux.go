@@ -3,10 +3,13 @@
 package clipboardfile
 
 import (
+	"fmt"
 	"net/url"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/ntsd/cross-clipboard/pkg/xclipboard"
 )
 
 type linuxFileClipboard struct{}
@@ -136,9 +139,11 @@ func (l *linuxFileClipboard) SetFiles(paths []string) error {
 		b.WriteString(u.String())
 		b.WriteString("\n")
 	}
-	cmd := exec.Command("xclip", "-i", "-selection", "clipboard", "-t", "x-special/gnome-copied-files")
-	cmd.Stdin = strings.NewReader(b.String())
-	return cmd.Run()
+	changed := xclipboard.Write(xclipboard.FmtFile, []byte(b.String()))
+	if changed == nil {
+		return fmt.Errorf("xclipboard: failed to write file clipboard")
+	}
+	return nil
 }
 
 func (l *linuxFileClipboard) Paste() error {

@@ -9,7 +9,7 @@ import (
 
 	"github.com/ntsd/cross-clipboard/pkg/config"
 	"github.com/ntsd/cross-clipboard/pkg/device"
-	"golang.design/x/clipboard"
+	"github.com/ntsd/cross-clipboard/pkg/xclipboard"
 )
 
 // ClipboardManager struct for clipbaord manager
@@ -26,13 +26,13 @@ type ClipboardManager struct {
 
 // NewClipboardManager create new clipbaord manager
 func NewClipboardManager(cfg *config.Config) *ClipboardManager {
-	err := clipboard.Init()
+	err := xclipboard.Init()
 	if err != nil {
 		panic(err)
 	}
 
-	textCh := clipboard.Watch(context.Background(), clipboard.FmtText)
-	imgCh := clipboard.Watch(context.Background(), clipboard.FmtImage)
+	textCh := xclipboard.Watch(context.Background(), xclipboard.FmtText)
+	imgCh := xclipboard.Watch(context.Background(), xclipboard.FmtImage)
 
 	return &ClipboardManager{
 		config:                   cfg,
@@ -60,10 +60,10 @@ func (c *ClipboardManager) WriteClipboard(newClipboard Clipboard) {
 	c.AddClipboardToHistory(&newClipboard)
 
 	if newClipboard.IsImage {
-		clipboard.Write(clipboard.FmtImage, newClipboard.Data)
+		xclipboard.Write(xclipboard.FmtImage, newClipboard.Data)
 		return
 	}
-	clipboard.Write(clipboard.FmtText, newClipboard.Data)
+	xclipboard.Write(xclipboard.FmtText, newClipboard.Data)
 }
 
 // AddClipboardToHistory add clipbaord to clipbaord history
