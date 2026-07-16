@@ -15,7 +15,7 @@ import (
 
 // ProgressFunc is called periodically during a send with bytes sent and the
 // total size. It mirrors zero-share's progress/bitrate UI updates.
-type ProgressFunc func(sent, total int64)
+type ProgressFunc func(name string, sent, total int64)
 
 // SendFile streams srcPath to the peer over t, mirroring zero-share's Sender:
 //  1. send MetaData (with the PGP-wrapped AES key when encrypting)
@@ -49,9 +49,9 @@ func SendFile(ctx context.Context, t Transport, srcPath string, relativePath str
 
 	id := newID()
 	meta := &protobuf.MetaData{
-		Name: filepath.Base(srcPath),
-		Size: info.Size(),
-		Type: mimeType(srcPath),
+		Name:         filepath.Base(srcPath),
+		Size:         info.Size(),
+		Type:         mimeType(srcPath),
 		Key:          wrappedKey,
 		RelativePath: relativePath,
 	}
@@ -117,7 +117,7 @@ func SendFile(ctx context.Context, t Transport, srcPath string, relativePath str
 			}
 			sent += int64(n)
 			if onProgress != nil && (sent == info.Size() || time.Since(last) > 200*time.Millisecond) {
-				onProgress(sent, info.Size())
+				onProgress(filepath.Base(srcPath), sent, info.Size())
 				last = time.Now()
 			}
 		}
@@ -129,7 +129,7 @@ func SendFile(ctx context.Context, t Transport, srcPath string, relativePath str
 		}
 	}
 	if onProgress != nil {
-		onProgress(sent, info.Size())
+		onProgress(filepath.Base(srcPath), sent, info.Size())
 	}
 	return nil
 }

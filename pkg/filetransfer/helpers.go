@@ -4,8 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"mime"
-	"strings"
 	"path/filepath"
+	"strings"
 
 	"github.com/ntsd/cross-clipboard/pkg/protobuf"
 )

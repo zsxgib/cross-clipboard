@@ -13,6 +13,17 @@ import (
 	"github.com/ntsd/cross-clipboard/pkg/stream"
 )
 
+// FileProgress is pushed to FileProgressChan during file transfers so the TUI
+// can display a live progress bar in the clipboard table.
+type FileProgress struct {
+	FileName  string // base filename
+	Sent      int64  // bytes transferred
+	Total     int64  // total file size in bytes
+	Direction string // "send" or "recv"
+	Done      bool   // transfer completed
+	Err       string // non-empty on failure
+}
+
 // handleFileStream is the libp2p stream handler for FileProtocolID. The remote
 // peer opened a stream to send a file; receive it and trigger the OS paste hook.
 func (cc *CrossClipboard) handleFileStream(s network.Stream) {
@@ -34,13 +45,22 @@ func (cc *CrossClipboard) handleFileStream(s network.Stream) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	res, err := filetransfer.ReceiveFile(ctx, t, cc.pgpDecrypter, opts, cc.fileTempDir, nil)
+	res, err := filetransfer.ReceiveFile(ctx, t, cc.pgpDecrypter, opts, cc.fileTempDir, nil, func(name string, received, total int64) {
+		cc.FileProgressChan <- FileProgress{
+			FileName:  name,
+			Sent:      received,
+			Total:     total,
+			Direction: "recv",
+		}
+	})
 	if err != nil {
 		cc.ErrorChan <- fmt.Errorf("receive file from %s: %w", peerID, err)
+		cc.FileProgressChan <- FileProgress{Direction: "recv", Done: true, Err: err.Error()}
 		s.Close()
 		return
 	}
 	cc.LogChan <- fmt.Sprintf("received file %s (%d bytes) from %s", res.Meta.GetName(), res.Meta.GetSize(), peerID)
+	cc.FileProgressChan <- FileProgress{FileName: res.Meta.GetName(), Sent: res.Meta.GetSize(), Total: res.Meta.GetSize(), Direction: "recv", Done: true}
 
 	if cc.onFileReceived != nil {
 		cc.onFileReceived(res.Path, res.Meta)
@@ -95,9 +115,22 @@ func (cc *CrossClipboard) sendFileToPeerStream(ctx context.Context, dv *device.D
 		enc = dv.PgpEncrypter
 	}
 	t := filetransfer.NewIOTransport(s, s)
-	return filetransfer.SendFile(ctx, t, srcPath, relativePath, enc, cc.Config.FileChunkSize, func(sent, total int64) {
-		cc.LogChan <- fmt.Sprintf("sending %s: %d/%d bytes", filepath.Base(srcPath), sent, total)
+	fname := filepath.Base(srcPath)
+	err = filetransfer.SendFile(ctx, t, srcPath, relativePath, enc, cc.Config.FileChunkSize, func(name string, sent, total int64) {
+		cc.LogChan <- fmt.Sprintf("sending %s: %d/%d bytes", name, sent, total)
+		cc.FileProgressChan <- FileProgress{
+			FileName:  name,
+			Sent:      sent,
+			Total:     total,
+			Direction: "send",
+		}
 	})
+	if err != nil {
+		cc.FileProgressChan <- FileProgress{FileName: fname, Direction: "send", Done: true, Err: err.Error()}
+	} else {
+		cc.FileProgressChan <- FileProgress{FileName: fname, Direction: "send", Done: true}
+	}
+	return err
 }
 
 // SetFileReceivedHook installs the callback invoked after a file is fully

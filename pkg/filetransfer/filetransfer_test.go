@@ -107,7 +107,7 @@ func runRoundTrip(t *testing.T, src string, relativePath string, enc *crypto.PGP
 	}
 	rc := make(chan res, 1)
 	go func() {
-		r, err := ReceiveFile(ctx, receiverT, dec, opts, destDir, onAccept)
+		r, err := ReceiveFile(ctx, receiverT, dec, opts, destDir, onAccept, nil)
 		rc <- res{r, err}
 	}()
 
@@ -208,7 +208,7 @@ func TestSendReceiveReject(t *testing.T) {
 
 	rc := make(chan error, 1)
 	go func() {
-		_, err := ReceiveFile(ctx, receiverT, dec, ReceiveOptions{AutoAccept: false, MaxSize: 1 << 30}, t.TempDir(), func(*protobuf.MetaData) bool { return false })
+		_, err := ReceiveFile(ctx, receiverT, dec, ReceiveOptions{AutoAccept: false, MaxSize: 1 << 30}, t.TempDir(), func(*protobuf.MetaData) bool { return false }, nil)
 		rc <- err
 	}()
 	err := SendFile(ctx, senderT, src, "", enc, ChunkSize, nil)
@@ -229,7 +229,7 @@ func TestSendReceiveMaxSize(t *testing.T) {
 
 	rc := make(chan error, 1)
 	go func() {
-		_, err := ReceiveFile(ctx, receiverT, dec, ReceiveOptions{AutoAccept: true, MaxSize: 1024}, t.TempDir(), nil) // 1KB max
+		_, err := ReceiveFile(ctx, receiverT, dec, ReceiveOptions{AutoAccept: true, MaxSize: 1024}, t.TempDir(), nil, nil) // 1KB max
 		rc <- err
 	}()
 	err := SendFile(ctx, senderT, src, "", enc, ChunkSize, nil)

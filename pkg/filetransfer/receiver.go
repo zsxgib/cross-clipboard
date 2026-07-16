@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/ntsd/cross-clipboard/pkg/crypto"
 	"github.com/ntsd/cross-clipboard/pkg/protobuf"
@@ -34,7 +35,7 @@ type FileResult struct {
 //  3. unwrap the PGP-wrapped AES key (when encrypted)
 //  4. accumulate AES-GCM-decrypted chunks, ack each with EVENT_RECEIVED_CHUNK
 //  5. finish when receivedSize >= declared size
-func ReceiveFile(ctx context.Context, t Transport, decrypter *crypto.PGPDecrypter, opts ReceiveOptions, destDir string, onAccept func(*protobuf.MetaData) bool) (*FileResult, error) {
+func ReceiveFile(ctx context.Context, t Transport, decrypter *crypto.PGPDecrypter, opts ReceiveOptions, destDir string, onAccept func(*protobuf.MetaData) bool, onProgress ProgressFunc) (*FileResult, error) {
 	msg, err := t.ReceiveMessage(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("receive metadata: %w", err)
@@ -91,6 +92,7 @@ func ReceiveFile(ctx context.Context, t Transport, decrypter *crypto.PGPDecrypte
 	}
 
 	var written int64
+	lastProgress := time.Now()
 	for {
 		if err := ctx.Err(); err != nil {
 			f.Close()
@@ -122,6 +124,10 @@ func ReceiveFile(ctx context.Context, t Transport, decrypter *crypto.PGPDecrypte
 		if err := t.SendMessage(eventMsg(cm.Id, protobuf.ReceiveEvent_EVENT_RECEIVED_CHUNK)); err != nil {
 			f.Close()
 			return nil, fmt.Errorf("send ack: %w", err)
+		}
+		if onProgress != nil && (m.Size > 0 && written >= m.Size || time.Since(lastProgress) > 200*time.Millisecond) {
+			onProgress(m.Name, written, m.Size)
+			lastProgress = time.Now()
 		}
 		if m.Size > 0 && written >= int64(m.Size) {
 			break

@@ -49,17 +49,20 @@ type CrossClipboard struct {
 	LogChan   chan string
 	ErrorChan chan error
 
+	FileProgressChan chan FileProgress
+
 	stopDiscovery chan struct{}
 }
 
 // NewCrossClipboard initial cross clipbaord
 func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 	cc := &CrossClipboard{
-		Config:        cfg,
-		LogChan:       make(chan string),
-		ErrorChan:     make(chan error),
-		stopDiscovery: make(chan struct{}),
-		recentSelfSet: make(map[string]time.Time),
+		Config:           cfg,
+		LogChan:          make(chan string),
+		ErrorChan:        make(chan error),
+		FileProgressChan: make(chan FileProgress, 32),
+		stopDiscovery:    make(chan struct{}),
+		recentSelfSet:    make(map[string]time.Time),
 	}
 
 	cc.ClipboardManager = clipboard.NewClipboardManager(cc.Config)
