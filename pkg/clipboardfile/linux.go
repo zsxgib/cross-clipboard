@@ -21,34 +21,77 @@ func (l *linuxFileClipboard) Available() bool {
 	return err == nil
 }
 
-// readURIs reads the clipboard's text/uri-list target and returns the file paths.
+// readURIs reads file paths from the clipboard.
+// It tries x-special/gnome-copied-files first (Nautilus/GNOME format),
+// then falls back to text/uri-list.
 func (l *linuxFileClipboard) readURIs() []string {
-	out, err := exec.Command("xclip", "-o", "-selection", "clipboard", "-t", "text/uri-list").Output()
+	// Try x-special/gnome-copied-files first (Nautilus, Nemo, etc.)
+	out, err := exec.Command("xclip", "-o", "-selection", "clipboard", "-t", "x-special/gnome-copied-files").Output()
+	if err == nil && len(out) > 0 {
+		if paths := parseCopiedFiles(string(out)); len(paths) > 0 {
+			return paths
+		}
+	}
+	// Fall back to text/uri-list
+	out, err = exec.Command("xclip", "-o", "-selection", "clipboard", "-t", "text/uri-list").Output()
 	if err != nil {
 		return nil
 	}
+	return parseURIList(string(out))
+}
+
+// parseCopiedFiles parses x-special/gnome-copied-files format:
+// "copy\nfile:///path1\nfile:///path2\n" or "cut\n..."
+func parseCopiedFiles(data string) []string {
+	lines := strings.Split(data, "\n")
 	var paths []string
-	for _, line := range strings.Split(string(out), "\n") {
+	for i, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		if line == "" {
 			continue
 		}
-		u, err := url.Parse(line)
-		if err != nil {
+		// First non-empty line is "copy" or "cut"
+		if i == 0 && (line == "copy" || line == "cut") {
 			continue
 		}
-		if u.Scheme != "file" {
-			continue
-		}
-		p, err := url.PathUnescape(u.Path)
-		if err != nil {
-			p = u.Path
-		}
+		p := parseFileURI(line)
 		if p != "" {
 			paths = append(paths, p)
 		}
 	}
 	return paths
+}
+
+// parseURIList parses text/uri-list format: "file:///path1\nfile:///path2\n"
+func parseURIList(data string) []string {
+	var paths []string
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		p := parseFileURI(line)
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths
+}
+
+// parseFileURI extracts the local path from a file:// URI.
+func parseFileURI(uri string) string {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return ""
+	}
+	if u.Scheme != "file" {
+		return ""
+	}
+	p, err := url.PathUnescape(u.Path)
+	if err != nil {
+		p = u.Path
+	}
+	return p
 }
 
 func (l *linuxFileClipboard) Watch(ctx interface{ Done() <-chan struct{} }) <-chan []string {
@@ -83,15 +126,17 @@ func (l *linuxFileClipboard) Watch(ctx interface{ Done() <-chan struct{} }) <-ch
 	return out
 }
 
-// SetFiles writes the paths as a file:// URI list onto the clipboard.
+// SetFiles writes the paths onto the clipboard using x-special/gnome-copied-files
+// format so that Nautilus and other GNOME file managers can paste them.
 func (l *linuxFileClipboard) SetFiles(paths []string) error {
 	var b strings.Builder
+	b.WriteString("copy\n")
 	for _, p := range paths {
 		u := &url.URL{Scheme: "file", Path: p}
 		b.WriteString(u.String())
 		b.WriteString("\n")
 	}
-	cmd := exec.Command("xclip", "-i", "-selection", "clipboard", "-t", "text/uri-list")
+	cmd := exec.Command("xclip", "-i", "-selection", "clipboard", "-t", "x-special/gnome-copied-files")
 	cmd.Stdin = strings.NewReader(b.String())
 	return cmd.Run()
 }
