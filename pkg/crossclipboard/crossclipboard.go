@@ -12,6 +12,7 @@ import (
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/ntsd/cross-clipboard/pkg/clipboard"
 	"github.com/ntsd/cross-clipboard/pkg/clipboardfile"
@@ -131,23 +132,55 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 					continue
 				}
 
-				cc.LogChan <- fmt.Sprintf("connecting to peer: %s", peerInfo.ID)
+				// Peer ID ordering to avoid TLS collision:
+				// lower ID dials first, higher ID waits for incoming connection.
+				if cc.Host.Network().Connectedness(peerInfo.ID) != network.Connected {
+					if cc.Host.ID().String() > peerInfo.ID.String() {
+						cc.LogChan <- fmt.Sprintf("waiting for peer %s to connect (higher peer ID)", peerInfo.ID)
+						waitTimer := time.NewTimer(15 * time.Second)
+						ticker := time.NewTicker(500 * time.Millisecond)
+					waitPeer:
+						for {
+							select {
+							case <-cc.stopDiscovery:
+								ticker.Stop()
+								waitTimer.Stop()
+								continue discoveryLoop
+							case <-waitTimer.C:
+								ticker.Stop()
+								cc.LogChan <- fmt.Sprintf("timeout waiting for %s, dialing anyway", peerInfo.ID)
+							case <-ticker.C:
+								if cc.Host.Network().Connectedness(peerInfo.ID) == network.Connected {
+									ticker.Stop()
+									waitTimer.Stop()
+									continue discoveryLoop
+								}
+							}
+							break waitPeer
+						}
+					}
 
-				retry := 1
-				for ; retry < 5; retry++ { // retry to connect
-					if err := cc.Host.Connect(ctx, peerInfo); err != nil {
-						cc.ErrorChan <- xerror.NewRuntimeErrorf(
-							"error to connect to peer %s, retrying %d",
-							peerInfo.ID,
-							retry,
-						).Wrap(err)
-						time.Sleep(time.Duration(retry*10) * time.Second)
+					cc.LogChan <- fmt.Sprintf("connecting to peer: %s", peerInfo.ID)
+
+					retry := 1
+					for ; retry < 5; retry++ { // retry to connect
+						if err := cc.Host.Connect(ctx, peerInfo); err != nil {
+							cc.ErrorChan <- xerror.NewRuntimeErrorf(
+								"error to connect to peer %s, retrying %d",
+								peerInfo.ID,
+								retry,
+							).Wrap(err)
+							time.Sleep(time.Duration(retry*2) * time.Second)
+							continue
+						}
+						break
+					}
+					if retry == 5 {
+						cc.ErrorChan <- xerror.NewRuntimeErrorf("error to connect to peer %s", peerInfo.ID)
 						continue
 					}
-					break
-				}
-				if retry == 5 {
-					cc.ErrorChan <- xerror.NewRuntimeErrorf("error to connect to peer %s", peerInfo.ID)
+				} else if dv != nil && dv.Stream != nil {
+					// Already connected with an active stream.
 					continue
 				}
 

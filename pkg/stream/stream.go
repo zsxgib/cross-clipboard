@@ -48,20 +48,27 @@ func NewStreamHandler(
 
 // HandleStream handler when a peer connect this host
 func (s *StreamHandler) HandleStream(stream network.Stream) {
-	s.logChan <- fmt.Sprintf("peer %s connecting to this host", stream.Conn().RemotePeer())
+	peerID := stream.Conn().RemotePeer()
+	s.logChan <- fmt.Sprintf("peer %s connecting to this host", peerID)
 
-	// Create a new peer
-	dv := device.NewDevice(peer.AddrInfo{
-		ID:    stream.Conn().RemotePeer(),
-		Addrs: []multiaddr.Multiaddr{stream.Conn().RemoteMultiaddr()},
-	}, stream)
-
-	dv.Reader = bufio.NewReader(stream)
-	dv.Writer = bufio.NewWriter(stream)
-	s.deviceManager.AddDevice(dv)
+	dv := s.deviceManager.GetDevice(peerID.String())
+	if dv != nil {
+		// Reuse existing device entry, update stream (preserves trust + name).
+		dv.AddressInfo.ID = peerID
+		dv.AddressInfo.Addrs = []multiaddr.Multiaddr{stream.Conn().RemoteMultiaddr()}
+		dv.Stream = stream
+		dv.Reader = bufio.NewReader(stream)
+		dv.Writer = bufio.NewWriter(stream)
+	} else {
+		dv = device.NewDevice(peer.AddrInfo{
+			ID:    peerID,
+			Addrs: []multiaddr.Multiaddr{stream.Conn().RemoteMultiaddr()},
+		}, stream)
+		s.deviceManager.AddDevice(dv)
+	}
 
 	go s.CreateReadData(dv.Reader, dv)
 
-	s.logChan <- fmt.Sprintf("peer %s connected to this host", stream.Conn().RemotePeer())
+	s.logChan <- fmt.Sprintf("peer %s connected to this host", peerID)
 	// 'stream' will stay open until you close it (or the other side closes it).
 }

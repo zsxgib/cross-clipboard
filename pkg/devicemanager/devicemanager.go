@@ -40,15 +40,21 @@ func (dm *DeviceManager) GetDevice(id string) *device.Device {
 func (dm *DeviceManager) UpdateDevice(dv *device.Device) {
 	dm.Devices[dv.AddressInfo.ID.String()] = dv
 
-	// Clean up stale entries: when a device reconnects with a new identity
-	// (different peer ID), remove old disconnected entries for the same
-	// physical machine (matched by name + OS).
+	// Clean up stale entries: when a device connects with a known identity,
+	// remove old entries for the same physical machine (by name+OS) and also
+	// remove entries with empty name from failed handshakes.
 	if dv.Status == device.StatusConnected && dv.Name != "" {
 		for id, other := range dm.Devices {
-			if id != dv.AddressInfo.ID.String() &&
-				other.Name == dv.Name &&
-				other.OS == dv.OS &&
-				other.Status == device.StatusDisconnected {
+			if id == dv.AddressInfo.ID.String() {
+				continue
+			}
+			isStale := other.Status == device.StatusDisconnected ||
+				other.Status == device.StatusError ||
+				other.Status == ""
+			if !isStale {
+				continue
+			}
+			if (other.Name == dv.Name && other.OS == dv.OS) || other.Name == "" {
 				delete(dm.Devices, id)
 			}
 		}
