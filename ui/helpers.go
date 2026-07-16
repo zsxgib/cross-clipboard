@@ -17,6 +17,11 @@ func humanReadableSize(bytes int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), suffix[exp])
 }
 
+// humanReadableSpeed converts bytes-per-second to a human-readable string.
+func humanReadableSpeed(bps int64) string {
+	return humanReadableSize(bps) + "/s"
+}
+
 // progressBar renders a 10-cell progress bar like [████░░░░░░] 42%.
 func progressBar(sent, total int64) string {
 	if total <= 0 {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/ntsd/cross-clipboard/pkg/crypto"
@@ -22,6 +23,8 @@ type FileProgress struct {
 	Direction string // "send" or "recv"
 	Done      bool   // transfer completed
 	Err       string // non-empty on failure
+	Speed     int64     // bytes per second (instantaneous)
+	Time      time.Time // when this update was generated
 }
 
 // handleFileStream is the libp2p stream handler for FileProtocolID. The remote
@@ -45,22 +48,38 @@ func (cc *CrossClipboard) handleFileStream(s network.Stream) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	var lastRecv int64
+	lastRecvTime := time.Now()
+	var lastRecvTotal int64
+	recvName := ""
 	res, err := filetransfer.ReceiveFile(ctx, t, cc.pgpDecrypter, opts, cc.fileTempDir, nil, func(name string, received, total int64) {
+		now := time.Now()
+		elapsed := now.Sub(lastRecvTime).Seconds()
+		var speed int64
+		if elapsed > 0 {
+			speed = int64(float64(received-lastRecv) / elapsed)
+		}
+		lastRecv = received
+		lastRecvTime = now
+		lastRecvTotal = total
+		recvName = name
 		cc.FileProgressChan <- FileProgress{
 			FileName:  name,
 			Sent:      received,
 			Total:     total,
 			Direction: "recv",
+			Speed:     speed,
+			Time:      now,
 		}
 	})
 	if err != nil {
 		cc.ErrorChan <- fmt.Errorf("receive file from %s: %w", peerID, err)
-		cc.FileProgressChan <- FileProgress{Direction: "recv", Done: true, Err: err.Error()}
+		cc.FileProgressChan <- FileProgress{FileName: recvName, Sent: lastRecv, Total: lastRecvTotal, Direction: "recv", Done: true, Err: err.Error(), Time: time.Now()}
 		s.Close()
 		return
 	}
 	cc.LogChan <- fmt.Sprintf("received file %s (%d bytes) from %s", res.Meta.GetName(), res.Meta.GetSize(), peerID)
-	cc.FileProgressChan <- FileProgress{FileName: res.Meta.GetName(), Sent: res.Meta.GetSize(), Total: res.Meta.GetSize(), Direction: "recv", Done: true}
+	cc.FileProgressChan <- FileProgress{FileName: res.Meta.GetName(), Sent: res.Meta.GetSize(), Total: res.Meta.GetSize(), Direction: "recv", Done: true, Time: time.Now()}
 
 	if cc.onFileReceived != nil {
 		cc.onFileReceived(res.Path, res.Meta)
@@ -116,19 +135,33 @@ func (cc *CrossClipboard) sendFileToPeerStream(ctx context.Context, dv *device.D
 	}
 	t := filetransfer.NewIOTransport(s, s)
 	fname := filepath.Base(srcPath)
+	var lastSent int64
+	var lastTotal int64
+	lastTime := time.Now()
 	err = filetransfer.SendFile(ctx, t, srcPath, relativePath, enc, cc.Config.FileChunkSize, func(name string, sent, total int64) {
+		lastTotal = total
+		now := time.Now()
+		elapsed := now.Sub(lastTime).Seconds()
+		var speed int64
+		if elapsed > 0 {
+			speed = int64(float64(sent-lastSent) / elapsed)
+		}
+		lastSent = sent
+		lastTime = now
 		cc.LogChan <- fmt.Sprintf("sending %s: %d/%d bytes", name, sent, total)
 		cc.FileProgressChan <- FileProgress{
 			FileName:  name,
 			Sent:      sent,
 			Total:     total,
 			Direction: "send",
+			Speed:     speed,
+			Time:      now,
 		}
 	})
 	if err != nil {
-		cc.FileProgressChan <- FileProgress{FileName: fname, Direction: "send", Done: true, Err: err.Error()}
+		cc.FileProgressChan <- FileProgress{FileName: fname, Sent: lastSent, Total: lastTotal, Direction: "send", Done: true, Err: err.Error(), Time: time.Now()}
 	} else {
-		cc.FileProgressChan <- FileProgress{FileName: fname, Direction: "send", Done: true}
+		cc.FileProgressChan <- FileProgress{FileName: fname, Sent: lastTotal, Total: lastTotal, Direction: "send", Done: true, Time: time.Now()}
 	}
 	return err
 }

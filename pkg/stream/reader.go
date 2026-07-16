@@ -95,9 +95,15 @@ disconnect:
 		}
 
 		if clipboardData != nil {
+		if s.clipboardManager.IsFileClipboardActive() {
+			s.logChan <- fmt.Sprintf("suppressing received clipboard: file clipboard active, peer: %s size: %d", dv.AddressInfo.ID, clipboardData.DataSize)
+		} else if !clipboardData.IsImage && s.clipboardManager.IsFileURIList(clipboardData.Data) {
+			s.logChan <- fmt.Sprintf("suppressing received clipboard: file URI list, peer: %s size: %d", dv.AddressInfo.ID, clipboardData.DataSize)
+		} else {
 			s.clipboardManager.WriteClipboard(clipboard.FromProtobuf(clipboardData, dv))
 			s.logChan <- fmt.Sprintf("received clipboard data, peer: %s size: %d", dv.AddressInfo.ID, clipboardData.DataSize)
 		}
+	}
 
 		if deviceData != nil {
 			s.logChan <- fmt.Sprintf("received device data, peer: %s", dv.AddressInfo.ID)
