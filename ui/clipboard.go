@@ -37,9 +37,9 @@ func (v *View) newClipboardBox() tview.Primitive {
 		for _, fp := range fileTransfers {
 			table.SetCell(row, 0, tview.NewTableCell(time.Now().Format("15:04:05")))
 			table.SetCell(row, 1, tview.NewTableCell(humanReadableSize(fp.Total)))
-			dirStr := "file→"
+			dirStr := "file->"
 			if fp.Direction == "recv" {
-				dirStr = "file←"
+				dirStr = "file<-"
 			}
 			table.SetCell(row, 2, tview.NewTableCell(dirStr))
 			if !hiddenText {
@@ -84,15 +84,17 @@ func (v *View) newClipboardBox() tview.Primitive {
 		for {
 			select {
 			case <-cc.ClipboardManager.ClipboardsHistoryUpdated:
-				rebuild()
+				v.app.QueueUpdateDraw(rebuild)
 			case fp := <-cc.FileProgressChan:
-				key := fp.FileName + fp.Direction
-				if fp.Done {
-					delete(fileTransfers, key)
-				} else {
-					fileTransfers[key] = fp
-				}
-				rebuild()
+				v.app.QueueUpdateDraw(func() {
+					key := fp.FileName + fp.Direction
+					if fp.Done {
+						delete(fileTransfers, key)
+					} else {
+						fileTransfers[key] = fp
+					}
+					rebuild()
+				})
 			}
 		}
 	}()
