@@ -37,9 +37,6 @@ func SendFile(ctx context.Context, t Transport, srcPath string, encrypter *crypt
 	if info.IsDir() {
 		return fmt.Errorf("source is a directory: %s", srcPath)
 	}
-	if info.Size() > (1<<31 - 1) { // MetaData.size is int32
-		return fmt.Errorf("file too large for int32 size: %d", info.Size())
-	}
 
 	var aesKey, wrappedKey []byte
 	if encrypter != nil {
@@ -56,7 +53,7 @@ func SendFile(ctx context.Context, t Transport, srcPath string, encrypter *crypt
 	id := newID()
 	meta := &protobuf.MetaData{
 		Name: filepath.Base(srcPath),
-		Size: int32(info.Size()),
+		Size: info.Size(),
 		Type: mimeType(srcPath),
 		Key:  wrappedKey,
 	}

@@ -104,7 +104,7 @@ func LoadConfig() (*Config, error) {
 	viper.SetDefault("max_size", 5<<20) // 5MB
 	viper.SetDefault("max_history", 10)
 
-	viper.SetDefault("max_file_size", int64(1<<30)) // 1 GiB
+	viper.SetDefault("max_file_size", int64(1<<33)) // 8 GiB
 	viper.SetDefault("file_temp_dir", "")           // resolved at runtime to config dir/incoming
 	viper.SetDefault("auto_paste", true)
 	viper.SetDefault("file_chunk_size", 32*1024)

@@ -28,7 +28,7 @@ func (cc *CrossClipboard) handleFileStream(s network.Stream) {
 	t := filetransfer.NewIOTransport(s, s)
 	opts := filetransfer.ReceiveOptions{
 		AutoAccept: cc.Config.FileAutoAccept,
-		MaxSize:    int32(cc.Config.MaxFileSize),
+		MaxSize:    cc.Config.MaxFileSize,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

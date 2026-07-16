@@ -13,12 +13,12 @@ import (
 // ReceiveOptions mirrors zero-share's ReceiveOptions (autoAccept, maxSize).
 type ReceiveOptions struct {
 	AutoAccept bool
-	MaxSize    int32
+	MaxSize    int64
 }
 
 // DefaultReceiveOptions mirrors zero-share's DEFAULT_RECEIVE_OPTIONS.
 func DefaultReceiveOptions() ReceiveOptions {
-	return ReceiveOptions{AutoAccept: true, MaxSize: 1 << 30} // 1 GiB
+	return ReceiveOptions{AutoAccept: true, MaxSize: 1 << 33} // 8 GiB
 }
 
 // FileResult is returned when a transfer completes successfully.

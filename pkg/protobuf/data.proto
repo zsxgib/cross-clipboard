@@ -22,7 +22,7 @@ message ClipboardData {
 // the existing per-device OpenPGP (gopenpgp) encrypter.
 message MetaData {
   string name = 1;  // base filename
-  int32 size = 2;   // file size in bytes
+  int64 size = 2;   // file size in bytes
   string type = 3;  // MIME type
   bytes key = 4;    // PGP-encrypted AES key
 }
