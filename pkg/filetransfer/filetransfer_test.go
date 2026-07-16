@@ -94,7 +94,7 @@ func writeTempFile(t *testing.T, data []byte) string {
 
 // runRoundTrip sends src via sender and receives via receiver, returning the
 // received file path. receiver runs in a goroutine.
-func runRoundTrip(t *testing.T, src string, enc *crypto.PGPEncrypter, dec *crypto.PGPDecrypter, opts ReceiveOptions, onAccept func(*protobuf.MetaData) bool) string {
+func runRoundTrip(t *testing.T, src string, relativePath string, enc *crypto.PGPEncrypter, dec *crypto.PGPDecrypter, opts ReceiveOptions, onAccept func(*protobuf.MetaData) bool) string {
 	t.Helper()
 	senderT, receiverT := newPipe()
 	destDir := t.TempDir()
@@ -111,7 +111,7 @@ func runRoundTrip(t *testing.T, src string, enc *crypto.PGPEncrypter, dec *crypt
 		rc <- res{r, err}
 	}()
 
-	if err := SendFile(ctx, senderT, src, enc, ChunkSize, nil); err != nil {
+	if err := SendFile(ctx, senderT, src, relativePath, enc, ChunkSize, nil); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	got := <-rc
@@ -177,7 +177,7 @@ func TestPGPKeyWrapUnwrap(t *testing.T) {
 func TestSendReceiveEncrypted(t *testing.T) {
 	enc, dec := testPGP(t)
 	src := writeTempFile(t, randBytes(t, 100*1024)) // 4 chunks
-	dst := runRoundTrip(t, src, enc, dec, DefaultReceiveOptions(), nil)
+	dst := runRoundTrip(t, src, "", enc, dec, DefaultReceiveOptions(), nil)
 
 	orig, _ := os.ReadFile(src)
 	got, _ := os.ReadFile(dst)
@@ -191,7 +191,7 @@ func TestSendReceiveEncrypted(t *testing.T) {
 
 func TestSendReceivePlain(t *testing.T) {
 	src := writeTempFile(t, randBytes(t, 5000)) // 1 chunk
-	dst := runRoundTrip(t, src, nil, nil, DefaultReceiveOptions(), nil)
+	dst := runRoundTrip(t, src, "", nil, nil, DefaultReceiveOptions(), nil)
 	orig, _ := os.ReadFile(src)
 	got, _ := os.ReadFile(dst)
 	if !bytes.Equal(orig, got) {
@@ -211,7 +211,7 @@ func TestSendReceiveReject(t *testing.T) {
 		_, err := ReceiveFile(ctx, receiverT, dec, ReceiveOptions{AutoAccept: false, MaxSize: 1 << 30}, t.TempDir(), func(*protobuf.MetaData) bool { return false })
 		rc <- err
 	}()
-	err := SendFile(ctx, senderT, src, enc, ChunkSize, nil)
+	err := SendFile(ctx, senderT, src, "", enc, ChunkSize, nil)
 	if err == nil {
 		t.Fatal("expected sender to fail on reject")
 	}
@@ -232,7 +232,7 @@ func TestSendReceiveMaxSize(t *testing.T) {
 		_, err := ReceiveFile(ctx, receiverT, dec, ReceiveOptions{AutoAccept: true, MaxSize: 1024}, t.TempDir(), nil) // 1KB max
 		rc <- err
 	}()
-	err := SendFile(ctx, senderT, src, enc, ChunkSize, nil)
+	err := SendFile(ctx, senderT, src, "", enc, ChunkSize, nil)
 	if err == nil {
 		t.Fatal("expected sender to fail on size validation")
 	}
@@ -253,5 +253,47 @@ func TestSafeFileName(t *testing.T) {
 		if got := safeFileName(c.in); got != c.want {
 			t.Errorf("safeFileName(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestSafeFilePath(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{".", ""},
+		{"file.txt", "file.txt"},
+		{"subdir/file.txt", "subdir/file.txt"},
+		{"subdir/deep/file.txt", "subdir/deep/file.txt"},
+		{"../escape.txt", ""},
+		{"..", ""},
+		{"foo/../bar.txt", "bar.txt"},
+		{"/abs/path.txt", ""},
+		{"./file.txt", "file.txt"},
+	}
+	for _, c := range cases {
+		if got := safeFilePath(c.in); got != c.want {
+			t.Errorf("safeFilePath(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestSendReceiveWithRelativePath(t *testing.T) {
+	enc, dec := testPGP(t)
+	src := writeTempFile(t, randBytes(t, 5000))
+	relPath := "subdir/deep/file.bin"
+	dst := runRoundTrip(t, src, relPath, enc, dec, DefaultReceiveOptions(), nil)
+
+	orig, _ := os.ReadFile(src)
+	got, _ := os.ReadFile(dst)
+	if !bytes.Equal(orig, got) {
+		t.Fatal("relative-path transfer content mismatch")
+	}
+	if filepath.Base(dst) != "file.bin" {
+		t.Fatalf("base name mismatch: %s", filepath.Base(dst))
+	}
+	if filepath.Base(filepath.Dir(dst)) != "deep" {
+		t.Fatalf("parent dir mismatch: %s", filepath.Base(filepath.Dir(dst)))
+	}
+	if filepath.Base(filepath.Dir(filepath.Dir(dst))) != "subdir" {
+		t.Fatalf("grandparent dir mismatch: %s", filepath.Base(filepath.Dir(filepath.Dir(dst))))
 	}
 }

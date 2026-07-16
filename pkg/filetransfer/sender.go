@@ -26,16 +26,13 @@ type ProgressFunc func(sent, total int64)
 // encrypter wraps the AES key with the peer's PGP public key; nil disables
 // application-layer encryption (relying on libp2p transport encryption only),
 // matching zero-share's isEncrypt=false path.
-func SendFile(ctx context.Context, t Transport, srcPath string, encrypter *crypto.PGPEncrypter, chunkSize int, onProgress ProgressFunc) error {
+func SendFile(ctx context.Context, t Transport, srcPath string, relativePath string, encrypter *crypto.PGPEncrypter, chunkSize int, onProgress ProgressFunc) error {
 	if chunkSize <= 0 {
 		chunkSize = ChunkSize
 	}
 	info, err := os.Stat(srcPath)
 	if err != nil {
 		return fmt.Errorf("stat source: %w", err)
-	}
-	if info.IsDir() {
-		return fmt.Errorf("source is a directory: %s", srcPath)
 	}
 
 	var aesKey, wrappedKey []byte
@@ -55,7 +52,8 @@ func SendFile(ctx context.Context, t Transport, srcPath string, encrypter *crypt
 		Name: filepath.Base(srcPath),
 		Size: info.Size(),
 		Type: mimeType(srcPath),
-		Key:  wrappedKey,
+		Key:          wrappedKey,
+		RelativePath: relativePath,
 	}
 
 	// 1) send metadata

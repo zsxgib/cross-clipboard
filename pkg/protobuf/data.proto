@@ -25,6 +25,7 @@ message MetaData {
   int64 size = 2;   // file size in bytes
   string type = 3;  // MIME type
   bytes key = 4;    // PGP-encrypted AES key
+  string relative_path = 5;  // path relative to copied directory root (empty for single files)
 }
 
 enum ReceiveEvent {

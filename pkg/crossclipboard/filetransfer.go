@@ -3,6 +3,7 @@ package crossclipboard
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/libp2p/go-libp2p/core/network"
@@ -49,6 +50,8 @@ func (cc *CrossClipboard) handleFileStream(s network.Stream) {
 
 // SendFileToPeer opens a FileProtocolID stream to a trusted device and streams
 // srcPath to it. Called by the OS file-clipboard watcher when a file is copied.
+// If srcPath is a directory, each file inside is sent individually with its
+// relative path so the receiver can recreate the directory structure.
 func (cc *CrossClipboard) SendFileToPeer(ctx context.Context, dv *device.Device, srcPath string) error {
 	if dv.Status != device.StatusConnected {
 		return fmt.Errorf("device %s not connected", dv.AddressInfo.ID)
@@ -57,6 +60,30 @@ func (cc *CrossClipboard) SendFileToPeer(ctx context.Context, dv *device.Device,
 		return fmt.Errorf("device %s not trusted (no pgp encrypter)", dv.AddressInfo.ID)
 	}
 
+	info, err := os.Stat(srcPath)
+	if err != nil {
+		return fmt.Errorf("stat source: %w", err)
+	}
+	if info.IsDir() {
+		return filepath.Walk(srcPath, func(path string, fi os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if fi.IsDir() {
+				return nil
+			}
+			relPath, err := filepath.Rel(srcPath, path)
+			if err != nil {
+				return err
+			}
+			return cc.sendFileToPeerStream(ctx, dv, path, relPath)
+		})
+	}
+	return cc.sendFileToPeerStream(ctx, dv, srcPath, "")
+}
+
+// sendFileToPeerStream opens one libp2p stream and sends a single file over it.
+func (cc *CrossClipboard) sendFileToPeerStream(ctx context.Context, dv *device.Device, srcPath string, relativePath string) error {
 	s, err := cc.Host.NewStream(ctx, dv.AddressInfo.ID, stream.FileProtocolID)
 	if err != nil {
 		return fmt.Errorf("open file stream to %s: %w", dv.AddressInfo.ID, err)
@@ -68,7 +95,7 @@ func (cc *CrossClipboard) SendFileToPeer(ctx context.Context, dv *device.Device,
 		enc = dv.PgpEncrypter
 	}
 	t := filetransfer.NewIOTransport(s, s)
-	return filetransfer.SendFile(ctx, t, srcPath, enc, cc.Config.FileChunkSize, func(sent, total int64) {
+	return filetransfer.SendFile(ctx, t, srcPath, relativePath, enc, cc.Config.FileChunkSize, func(sent, total int64) {
 		cc.LogChan <- fmt.Sprintf("sending %s: %d/%d bytes", filepath.Base(srcPath), sent, total)
 	})
 }

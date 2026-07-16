@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"mime"
+	"strings"
 	"path/filepath"
 
 	"github.com/ntsd/cross-clipboard/pkg/protobuf"
@@ -39,6 +40,22 @@ func safeFileName(name string) string {
 		return "file"
 	}
 	return name
+}
+
+// safeFilePath sanitises a relative path so a malicious sender cannot escape
+// destDir via ../ or absolute paths. Empty string means "use base name only".
+func safeFilePath(relPath string) string {
+	relPath = filepath.ToSlash(filepath.Clean(relPath))
+	if relPath == "." || relPath == "" {
+		return ""
+	}
+	if relPath == ".." || strings.HasPrefix(relPath, "../") {
+		return ""
+	}
+	if filepath.IsAbs(relPath) {
+		return ""
+	}
+	return relPath
 }
 
 // mimeType returns a best-effort MIME type from the file extension.

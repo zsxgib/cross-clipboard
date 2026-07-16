@@ -79,6 +79,12 @@ func ReceiveFile(ctx context.Context, t Transport, decrypter *crypto.PGPDecrypte
 		return nil, fmt.Errorf("mkdir dest: %w", err)
 	}
 	dst := filepath.Join(destDir, safeFileName(m.Name))
+	if relPath := safeFilePath(m.RelativePath); relPath != "" {
+		dst = filepath.Join(destDir, relPath)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return nil, fmt.Errorf("mkdir dest subpath: %w", err)
+		}
+	}
 	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open dest: %w", err)
