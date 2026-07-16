@@ -149,6 +149,7 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 							case <-waitTimer.C:
 								ticker.Stop()
 								cc.LogChan <- fmt.Sprintf("timeout waiting for %s, dialing anyway", peerInfo.ID)
+								break waitPeer
 							case <-ticker.C:
 								if cc.Host.Network().Connectedness(peerInfo.ID) == network.Connected {
 									ticker.Stop()
@@ -156,7 +157,6 @@ func NewCrossClipboard(cfg *config.Config) (*CrossClipboard, error) {
 									continue discoveryLoop
 								}
 							}
-							break waitPeer
 						}
 					}
 
