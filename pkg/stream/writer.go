@@ -41,6 +41,11 @@ func (s *StreamHandler) sendClipboard(clipboardBytes []byte, isImage bool) {
 		return
 	}
 
+	if s.clipboardManager.IsFileClipboardActive() {
+		s.logChan <- fmt.Sprintf("suppressing clipboard send: file clipboard active (size %d)", clipboardLength)
+		return
+	}
+
 	if !isImage && s.clipboardManager.IsFileURIList(clipboardBytes) {
 		s.logChan <- "clipboard contains file URI list, skipping text sync (file watcher handles it)"
 		return

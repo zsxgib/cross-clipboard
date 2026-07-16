@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/ntsd/cross-clipboard/pkg/config"
 	"github.com/ntsd/cross-clipboard/pkg/device"
@@ -19,6 +21,7 @@ type ClipboardManager struct {
 	ClipboardsHistory        []*Clipboard
 	ClipboardsHistoryUpdated chan struct{}
 	receivedClipboard        *Clipboard
+	fileClipboardActive      atomic.Bool
 }
 
 // NewClipboardManager create new clipbaord manager
@@ -109,4 +112,20 @@ func (c *ClipboardManager) IsFileURIList(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// SetFileClipboardActive marks that a file-copy operation is in progress.
+// The text/image clipboard watcher suppresses sync for 5 seconds to avoid
+// broadcasting the file path as text while xclip serves the uri-list target.
+func (c *ClipboardManager) SetFileClipboardActive() {
+	c.fileClipboardActive.Store(true)
+	go func() {
+		time.Sleep(5 * time.Second)
+		c.fileClipboardActive.Store(false)
+	}()
+}
+
+// IsFileClipboardActive returns true if a file-copy suppression window is active.
+func (c *ClipboardManager) IsFileClipboardActive() bool {
+	return c.fileClipboardActive.Load()
 }

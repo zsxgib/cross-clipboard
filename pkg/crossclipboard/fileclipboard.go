@@ -30,6 +30,7 @@ func (cc *CrossClipboard) StartFileClipboard(ctx context.Context) {
 	// receive hook: put the received file on the OS clipboard (+ paste),
 	// guarded against the local watcher echoing it back to the peer.
 	cc.SetFileReceivedHook(func(path string, _ interface{}) {
+		cc.ClipboardManager.SetFileClipboardActive()
 		cc.markSelfSet(path)
 		if err := fc.SetFiles([]string{path}); err != nil {
 			cc.ErrorChan <- fmt.Errorf("set file clipboard: %w", err)
@@ -53,6 +54,7 @@ func (cc *CrossClipboard) StartFileClipboard(ctx context.Context) {
 			if len(paths) == 0 {
 				continue
 			}
+			cc.ClipboardManager.SetFileClipboardActive()
 			cc.sendFileCopies(ctx, paths)
 		}
 	}()
