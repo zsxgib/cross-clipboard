@@ -11,7 +11,7 @@ import (
 	"github.com/ntsd/cross-clipboard/pkg/xerror"
 )
 
-const limitDataSize = 1 << 20 // data size to avoid to read (100 MB)
+const limitDataSize = 64 << 20 // hard cap of frame size to allocate (64 MB); oversized frames drop the connection but never ban the peer
 
 // CreateReadData craete a new read streaming for host or peer
 func (s *StreamHandler) CreateReadData(reader *bufio.Reader, dv *device.Device) {
@@ -44,19 +44,28 @@ disconnect:
 			break disconnect
 		}
 
-		// avoid to read big data from stream
-		if dataSize > limitDataSize {
-			s.errorChan <- xerror.NewRuntimeErrorf("data size %d > limit data size %d", dataSize, limitDataSize)
-			dv.Status = device.StatusBlocked
-			s.deviceManager.UpdateDevice(dv)
-			break disconnect
+		// discard clipboard frames larger than the configured max size instead
+		// of permanently blocking the sender: a large payload (e.g. a big
+		// image clipboard) is normal traffic, not abuse
+		if dataSize > s.config.MaxSize {
+			s.errorChan <- xerror.NewRuntimeErrorf("data size %d > config max size %d, discarding", dataSize, s.config.MaxSize)
+			if _, err := reader.Discard(dataSize); err != nil {
+				s.errorChan <- xerror.NewRuntimeError("error discarding oversized data").Wrap(err)
+				dv.Status = device.StatusError
+				s.deviceManager.UpdateDevice(dv)
+				break disconnect
+			}
+			continue
 		}
 
-		// skip clipboard size when data more than config max size
-		if dataSize > s.config.MaxSize {
-			s.errorChan <- xerror.NewRuntimeErrorf("data size %d > config max size %d", dataSize, s.config.MaxSize)
-			reader.Discard(dataSize)
-			continue
+		// memory guard: never allocate a frame above the hard cap. Drop the
+		// connection without banning the peer (blocked is only for manual
+		// user action).
+		if dataSize > limitDataSize {
+			s.errorChan <- xerror.NewRuntimeErrorf("data size %d > hard limit %d, dropping connection", dataSize, limitDataSize)
+			dv.Status = device.StatusError
+			s.deviceManager.UpdateDevice(dv)
+			break disconnect
 		}
 
 		buffer := make([]byte, dataSize)
@@ -95,15 +104,15 @@ disconnect:
 		}
 
 		if clipboardData != nil {
-		if s.clipboardManager.IsFileClipboardActive() {
-			s.logChan <- fmt.Sprintf("suppressing received clipboard: file clipboard active, peer: %s size: %d", dv.AddressInfo.ID, clipboardData.DataSize)
-		} else if !clipboardData.IsImage && s.clipboardManager.IsFileURIList(clipboardData.Data) {
-			s.logChan <- fmt.Sprintf("suppressing received clipboard: file URI list, peer: %s size: %d", dv.AddressInfo.ID, clipboardData.DataSize)
-		} else {
-			s.clipboardManager.WriteClipboard(clipboard.FromProtobuf(clipboardData, dv))
-			s.logChan <- fmt.Sprintf("received clipboard data, peer: %s size: %d", dv.AddressInfo.ID, clipboardData.DataSize)
+			if s.clipboardManager.IsFileClipboardActive() {
+				s.logChan <- fmt.Sprintf("suppressing received clipboard: file clipboard active, peer: %s size: %d", dv.AddressInfo.ID, clipboardData.DataSize)
+			} else if !clipboardData.IsImage && s.clipboardManager.IsFileURIList(clipboardData.Data) {
+				s.logChan <- fmt.Sprintf("suppressing received clipboard: file URI list, peer: %s size: %d", dv.AddressInfo.ID, clipboardData.DataSize)
+			} else {
+				s.clipboardManager.WriteClipboard(clipboard.FromProtobuf(clipboardData, dv))
+				s.logChan <- fmt.Sprintf("received clipboard data, peer: %s size: %d", dv.AddressInfo.ID, clipboardData.DataSize)
+			}
 		}
-	}
 
 		if deviceData != nil {
 			s.logChan <- fmt.Sprintf("received device data, peer: %s", dv.AddressInfo.ID)
