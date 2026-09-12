@@ -85,10 +85,19 @@ GOOS=windows GOARCH=amd64 go build -o /tmp/cross-clipboard.exe .
 - QQ 监听 `127.0.0.1:4001`（仅回环），cross-clipboard 监听 `0.0.0.0:4001`，二者共存不冲突，局域网连接不受影响。
 - 4000/4001 是腾讯老端口习惯，不是故障。
 
-### 6. 路由器 AP 隔离会导致"ping 不通但路由器能通"
-- LiBwrt（OpenWrt）`/var/run/hostapd-phy*.conf` 里 `ap_isolate=1` 时无线客户端互不可达（ARP 都失败），表现为 `Destination Host Unreachable`，但路由器 ping 目标正常。
-- 注意 uci 配置与运行配置可能不一致：`uci show wireless` 没有 isolate 但 hostapd 运行配置有。
-- 修复：`uci set wireless.radio0.isolate='0'`（两个 radio 都设）+ `uci commit`，然后 `sed -i 's/ap_isolate=1/ap_isolate=0/' /var/run/hostapd-phy*.conf` 并重启 hostapd（kill 后 netifd 自动拉起）。LiBwrt 的 `wifi reload` 可能不重新生成配置。
+### 6. 路由器 AP 隔离会导致"ping 不通但路由器能通"（根因与治本方案）
+- 现象：无线客户端之间互不可达（ARP 都失败，`Destination Host Unreachable`），但路由器 ping 目标正常、SSH/3389 也不通。
+- **根因（已定位到代码）**：OpenWrt/LiBwrt 的 `/lib/netifd/netifd-wireless.sh` 中 `_wireless_set_brsnoop_isolation()`：只要 bridge 的 `multicast_to_unicast` 生效（默认行为），netifd 会给无线接口**强制 `isolate=1`** → hostapd 生成 `ap_isolate=1`；而 br-lan 各端口 `hairpin_mode=0`，客户端流量无法经 bridge 回流 → 彻底隔离。
+- 常见的错误修法（不生效）：把 `isolate` 设在 `wireless.radioX`（那是 wifi-device 段，正确位置是 wifi-iface `wireless.default_radioX`）；或在 wifi-iface 里写 `option ap_isolate`（选项名错了，hostapd.sh 只读 `isolate`）。
+- **治本方案（重启路由器后不复发）**：
+  ```bash
+  uci set network.@device[0].multicast_to_unicast='0'   # br-lan 设备段
+  uci commit network
+  ubus call network.wireless reconf                      # 重新生成 hostapd 配置
+  # 验证：grep ap_isolate /var/run/hostapd-phy*.conf  → 应无输出
+  ```
+  注意 `reconf` 会踢掉所有无线客户端（Windows 约 20-30 秒后自动重连）。
+- 该固件的 `wifi reload` 不会重新生成 hostapd 配置；`ubus call network.wireless reconf` 才会（配置由 netifd 经 ubus `hostapd config_set` 热加载，无需重启 hostapd 进程）。
 
 ### 7. 其他小坑
 - Linux 用 `pkill -f "cross-clipboard -t"` 会匹配并杀死自己的 shell（命令行含同样字符串），用精确 PID 或 `pkill -x`。
